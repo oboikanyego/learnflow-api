@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { getAdminEntitlementHistory, getAdminOverview, listAdminUsers, updateAdminEntitlement } from '../controllers/admin.controller.js';
-import { getAdminBillingSettings, getAdminBillingSettingsAudit, getAdminSubscriptionOperations, patchAdminBillingSettings } from '../controllers/billing-settings.controller.js';
+import { getAdminBillingEvents, getAdminBillingSettings, getAdminBillingSettingsAudit, getAdminSubscriptionOperations, patchAdminBillingSettings } from '../controllers/billing-settings.controller.js';
 import { requireAdmin, requireAuth } from '../middleware/auth.middleware.js';
 
 export const adminRouter = Router();
@@ -13,3 +13,4 @@ adminRouter.get('/billing-settings', getAdminBillingSettings);
 adminRouter.patch('/billing-settings', patchAdminBillingSettings);
 adminRouter.get('/billing-settings/audit', getAdminBillingSettingsAudit);
 adminRouter.get('/subscription-operations', getAdminSubscriptionOperations);
+adminRouter.get('/billing-events', getAdminBillingEvents);
