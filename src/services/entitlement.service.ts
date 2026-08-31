@@ -27,6 +27,56 @@ export function entitlementCapabilities(entitlement?: Partial<Entitlement> | nul
   };
 }
 
+export async function applyEntitlementChange(input: {
+  userId: string;
+  plan: EntitlementPlan;
+  status: EntitlementStatus;
+  source: 'ADMIN' | 'BILLING' | 'SYSTEM';
+  changedBy?: string;
+  reason?: string;
+  provider?: string;
+  providerEventId?: string;
+  startsAt?: Date;
+  endsAt?: Date;
+}) {
+  const user = await UserModel.findById(input.userId);
+  if (!user) throw Object.assign(new Error('User not found'), { statusCode: 404 });
+
+  if (input.providerEventId) {
+    const duplicate = await EntitlementAuditModel.exists({ provider: input.provider, providerEventId: input.providerEventId });
+    if (duplicate) return { userId: user.id, entitlement: normalizeEntitlement(user.entitlement), capabilities: entitlementCapabilities(user.entitlement), duplicate: true };
+  }
+
+  const previous = normalizeEntitlement(user.entitlement);
+  const next: Entitlement = {
+    plan: input.plan,
+    status: input.status,
+    source: input.source,
+    startsAt: input.startsAt ?? new Date(),
+    endsAt: input.endsAt
+  };
+
+  user.entitlement = next;
+  await user.save();
+  await EntitlementAuditModel.create({
+    userId: user._id,
+    ...(input.changedBy ? { changedBy: input.changedBy } : {}),
+    actorType: input.source,
+    previousPlan: previous.plan,
+    newPlan: next.plan,
+    previousStatus: previous.status,
+    newStatus: next.status,
+    source: input.source,
+    reason: input.reason,
+    provider: input.provider,
+    providerEventId: input.providerEventId,
+    startsAt: next.startsAt,
+    endsAt: next.endsAt
+  });
+
+  return { userId: user.id, entitlement: normalizeEntitlement(user.entitlement), capabilities: entitlementCapabilities(user.entitlement), duplicate: false };
+}
+
 export async function changeUserEntitlement(input: {
   userId: string;
   changedBy: string;
@@ -36,34 +86,7 @@ export async function changeUserEntitlement(input: {
   startsAt?: Date;
   endsAt?: Date;
 }) {
-  const user = await UserModel.findById(input.userId);
-  if (!user) throw Object.assign(new Error('User not found'), { statusCode: 404 });
-
-  const previous = normalizeEntitlement(user.entitlement);
-  const next: Entitlement = {
-    plan: input.plan,
-    status: input.status,
-    source: 'ADMIN',
-    startsAt: input.startsAt ?? new Date(),
-    endsAt: input.endsAt
-  };
-
-  user.entitlement = next;
-  await user.save();
-  await EntitlementAuditModel.create({
-    userId: user._id,
-    changedBy: input.changedBy,
-    previousPlan: previous.plan,
-    newPlan: next.plan,
-    previousStatus: previous.status,
-    newStatus: next.status,
-    source: 'ADMIN',
-    reason: input.reason,
-    startsAt: next.startsAt,
-    endsAt: next.endsAt
-  });
-
-  return { userId: user.id, entitlement: normalizeEntitlement(user.entitlement), capabilities: entitlementCapabilities(user.entitlement) };
+  return applyEntitlementChange({ ...input, source: 'ADMIN' });
 }
 
 export async function listEntitlementHistory(userId: string) {
