@@ -26,7 +26,8 @@ const notificationPreferencesSchema = z.object({
   emailReminders: z.boolean(),
   reminderMinutes: z.number().int().min(5).max(1440),
   missedSessionEmails: z.boolean(),
-  celebrationEmails: z.boolean()
+  celebrationEmails: z.boolean(),
+  weeklyReviewEmails: z.boolean()
 });
 
 export async function register(req: Request, res: Response, next: NextFunction) {
