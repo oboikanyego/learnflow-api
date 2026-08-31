@@ -77,6 +77,58 @@ export async function applyEntitlementChange(input: {
   return { userId: user.id, entitlement: normalizeEntitlement(user.entitlement), capabilities: entitlementCapabilities(user.entitlement), duplicate: false };
 }
 
+export async function expireGraceEntitlement(input: {
+  userId: string;
+  provider?: string;
+  providerEventId: string;
+  reason: string;
+  now?: Date;
+}) {
+  const now = input.now ?? new Date();
+  const previousUser = await UserModel.findOneAndUpdate(
+    {
+      _id: input.userId,
+      'entitlement.plan': 'PRO',
+      'entitlement.status': 'GRACE',
+      'entitlement.endsAt': { $lte: now }
+    },
+    {
+      $set: {
+        entitlement: {
+          plan: 'FREE',
+          status: 'ACTIVE',
+          source: 'SYSTEM',
+          startsAt: now
+        }
+      }
+    },
+    { new: false }
+  );
+
+  if (!previousUser) return { expired: false };
+
+  const previous = normalizeEntitlement(previousUser.entitlement);
+  try {
+    await EntitlementAuditModel.create({
+      userId: previousUser._id,
+      actorType: 'SYSTEM',
+      previousPlan: previous.plan,
+      newPlan: 'FREE',
+      previousStatus: previous.status,
+      newStatus: 'ACTIVE',
+      source: 'SYSTEM',
+      reason: input.reason,
+      provider: input.provider,
+      providerEventId: input.providerEventId,
+      startsAt: now
+    });
+  } catch (error: any) {
+    if (error?.code !== 11000) throw error;
+  }
+
+  return { expired: true };
+}
+
 export async function changeUserEntitlement(input: {
   userId: string;
   changedBy: string;
