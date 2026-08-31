@@ -8,8 +8,13 @@ const schema = z.object({
   CLIENT_ORIGIN: z.string().default('http://localhost:4200'),
   JWT_SECRET: z.string().min(32),
   JWT_EXPIRES_IN: z.string().default('7d'),
+  AI_PROVIDER: z.enum(['openai', 'groq', 'gemini']).optional(),
   OPENAI_API_KEY: z.string().optional(),
   OPENAI_MODEL: z.string().default('gpt-5.6-luna'),
+  GROQ_API_KEY: z.string().optional(),
+  GROQ_MODEL: z.string().default('openai/gpt-oss-20b'),
+  GEMINI_API_KEY: z.string().optional(),
+  GEMINI_MODEL: z.string().default('gemini-3.7-flash'),
   RESEND_API_KEY: z.string().optional(),
   EMAIL_FROM: z.string().default('LearnFlow <onboarding@resend.dev>'),
   REMINDER_CRON_SECRET: z.string().min(24).optional()
