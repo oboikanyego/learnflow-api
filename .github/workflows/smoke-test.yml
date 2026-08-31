@@ -102,7 +102,7 @@ jobs:
           HIERARCHY=$(curl --fail --silent "http://127.0.0.1:3000/api/v1/learning-paths/$PATH_ID/hierarchy" -H "Authorization: Bearer $TOKEN")
           node -e "const d=JSON.parse(process.argv[1]); if(d.length!==1 || d[0].modules?.length!==1 || d[0].modules[0].lessons?.length!==1) throw new Error('Hierarchy mismatch')" "$HIERARCHY"
 
-          ANALYTICS=$(curl --fail --silent http://127.0.0.1:3000/api/v1/analytics/summary -H "Authorization: Bearer $TOKEN")
+          ANALYTICS=$(curl --fail --silent http://127.0.0.1:3000/api/v1/analytics -H "Authorization: Bearer $TOKEN")
           node -e "const d=JSON.parse(process.argv[1]); if(d.totalLessons!==1 || d.completedLessons!==1) throw new Error('Analytics mismatch: '+JSON.stringify(d))" "$ANALYTICS"
 
           curl --fail --silent -X DELETE "http://127.0.0.1:3000/api/v1/learning-paths/$PATH_ID" -H "Authorization: Bearer $TOKEN" > /dev/null
