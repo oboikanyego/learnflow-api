@@ -46,8 +46,24 @@ export async function billingCatalog() {
 }
 
 export async function getUserSubscription(userId: string) {
-  const [subscription, catalog] = await Promise.all([SubscriptionModel.findOne({ userId }).lean(), billingCatalog()]);
-  return { catalog, subscription };
+  const [subscription, catalog, user] = await Promise.all([
+    SubscriptionModel.findOne({ userId }).lean(),
+    billingCatalog(),
+    UserModel.findById(userId).select('entitlement').lean()
+  ]);
+  if (!user) throw Object.assign(new Error('User not found.'), { statusCode: 404 });
+
+  const entitlement = user.entitlement ?? { plan: 'FREE' as const, status: 'ACTIVE' as const, source: 'SYSTEM' as const };
+  const effectivePlan = entitlement.plan === 'PRO' && ['ACTIVE', 'GRACE'].includes(entitlement.status) ? 'PRO' as const : 'FREE' as const;
+
+  return {
+    catalog,
+    subscription,
+    effectivePlan,
+    entitlementStatus: entitlement.status,
+    entitlementSource: entitlement.source,
+    entitlementEndsAt: entitlement.endsAt
+  };
 }
 
 export async function createCheckout(userId: string, interval: 'MONTHLY' | 'YEARLY') {
