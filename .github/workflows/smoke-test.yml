@@ -1,0 +1,116 @@
+name: End-to-End Smoke Test
+
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    services:
+      mongodb:
+        image: mongo:8.0
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.adminCommand({ ping: 1 })'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      NODE_ENV: test
+      PORT: 3000
+      MONGODB_URI: mongodb://127.0.0.1:27017/learnflow_smoke
+      CLIENT_ORIGIN: http://localhost:4200
+      JWT_SECRET: learnflow-smoke-test-secret-that-is-long-enough-12345
+      JWT_EXPIRES_IN: 1h
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build API
+        run: npm run build
+
+      - name: Start API
+        run: |
+          npm start > /tmp/learnflow-api.log 2>&1 &
+          echo $! > /tmp/learnflow-api.pid
+
+      - name: Wait for API health
+        run: |
+          for i in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:3000/health > /tmp/health.json; then
+              cat /tmp/health.json
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/learnflow-api.log
+          exit 1
+
+      - name: Exercise core learning workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          REGISTER=$(curl --fail --silent -X POST http://127.0.0.1:3000/api/v1/auth/register \
+            -H 'Content-Type: application/json' \
+            -d '{"name":"Smoke Learner","email":"smoke-'"$GITHUB_RUN_ID"'@example.com","password":"StrongPass123!","timezone":"Africa/Johannesburg"}')
+          TOKEN=$(node -e "const d=JSON.parse(process.argv[1]); if(!d.token) process.exit(1); process.stdout.write(d.token)" "$REGISTER")
+
+          PROFILE=$(curl --fail --silent http://127.0.0.1:3000/api/v1/auth/me -H "Authorization: Bearer $TOKEN")
+          node -e "const d=JSON.parse(process.argv[1]); if(d.timezone!=='Africa/Johannesburg') throw new Error('Timezone mismatch')" "$PROFILE"
+
+          PATH_RES=$(curl --fail --silent -X POST http://127.0.0.1:3000/api/v1/learning-paths \
+            -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+            -d '{"title":"React Smoke Path","description":"CI smoke test","status":"ACTIVE"}')
+          PATH_ID=$(node -e "const d=JSON.parse(process.argv[1]); process.stdout.write(d._id || d.id)" "$PATH_RES")
+
+          PHASE_RES=$(curl --fail --silent -X POST "http://127.0.0.1:3000/api/v1/learning-paths/$PATH_ID/phases" \
+            -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+            -d '{"title":"Fundamentals"}')
+          PHASE_ID=$(node -e "const d=JSON.parse(process.argv[1]); process.stdout.write(d._id || d.id)" "$PHASE_RES")
+
+          MODULE_RES=$(curl --fail --silent -X POST "http://127.0.0.1:3000/api/v1/phases/$PHASE_ID/modules" \
+            -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+            -d '{"title":"Components"}')
+          MODULE_ID=$(node -e "const d=JSON.parse(process.argv[1]); process.stdout.write(d._id || d.id)" "$MODULE_RES")
+
+          LESSON_RES=$(curl --fail --silent -X POST "http://127.0.0.1:3000/api/v1/modules/$MODULE_ID/lessons" \
+            -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+            -d '{"title":"Build first component","durationMinutes":60}')
+          LESSON_ID=$(node -e "const d=JSON.parse(process.argv[1]); process.stdout.write(d._id || d.id)" "$LESSON_RES")
+
+          SCHEDULED=$(curl --fail --silent -X PATCH "http://127.0.0.1:3000/api/v1/lessons/$LESSON_ID" \
+            -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+            -d '{"scheduledAt":"2030-09-02T17:00:00.000Z","status":"SCHEDULED"}')
+          node -e "const d=JSON.parse(process.argv[1]); if(d.status!=='SCHEDULED') throw new Error('Lesson was not scheduled')" "$SCHEDULED"
+
+          COMPLETED=$(curl --fail --silent -X PATCH "http://127.0.0.1:3000/api/v1/lessons/$LESSON_ID" \
+            -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+            -d '{"status":"COMPLETED","notes":"Smoke test completed"}')
+          node -e "const d=JSON.parse(process.argv[1]); if(d.status!=='COMPLETED' || !d.completedAt) throw new Error('Lesson completion failed')" "$COMPLETED"
+
+          HIERARCHY=$(curl --fail --silent "http://127.0.0.1:3000/api/v1/learning-paths/$PATH_ID/hierarchy" -H "Authorization: Bearer $TOKEN")
+          node -e "const d=JSON.parse(process.argv[1]); if(d.length!==1 || d[0].modules?.length!==1 || d[0].modules[0].lessons?.length!==1) throw new Error('Hierarchy mismatch')" "$HIERARCHY"
+
+          ANALYTICS=$(curl --fail --silent http://127.0.0.1:3000/api/v1/analytics/summary -H "Authorization: Bearer $TOKEN")
+          node -e "const d=JSON.parse(process.argv[1]); if(d.totalLessons!==1 || d.completedLessons!==1) throw new Error('Analytics mismatch: '+JSON.stringify(d))" "$ANALYTICS"
+
+          curl --fail --silent -X DELETE "http://127.0.0.1:3000/api/v1/learning-paths/$PATH_ID" -H "Authorization: Bearer $TOKEN" > /dev/null
+          LIST=$(curl --fail --silent http://127.0.0.1:3000/api/v1/learning-paths -H "Authorization: Bearer $TOKEN")
+          node -e "const d=JSON.parse(process.argv[1]); if(d.length!==0) throw new Error('Cleanup failed')" "$LIST"
+
+          echo 'Core LearnFlow smoke workflow passed.'
+
+      - name: Print API logs on failure
+        if: failure()
+        run: cat /tmp/learnflow-api.log || true
