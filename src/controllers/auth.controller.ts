@@ -2,8 +2,14 @@ import type { NextFunction, Request, Response } from 'express';
 import { z } from 'zod';
 import type { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import { authService } from '../services/auth.service.js';
+import { isValidTimeZone } from '../utils/timezone.js';
 
-const registerSchema = z.object({ name: z.string().trim().min(2).max(80), email: z.email(), password: z.string().min(8).max(128) });
+const registerSchema = z.object({
+  name: z.string().trim().min(2).max(80),
+  email: z.email(),
+  password: z.string().min(8).max(128),
+  timezone: z.string().refine(isValidTimeZone, 'Invalid IANA timezone').default('UTC')
+});
 const loginSchema = z.object({ email: z.email(), password: z.string().min(8).max(128) });
 
 export async function register(req: Request, res: Response, next: NextFunction) {
