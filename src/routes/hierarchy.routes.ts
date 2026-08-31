@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { requireAuth } from '../middleware/auth.middleware.js';
 import { getHierarchy,createPhase,createModule,createLesson,patchLesson,deletePhase,deleteModule,deleteLesson } from '../controllers/hierarchy.controller.js';
+import { addLessonComment, listLessonComments } from '../controllers/lesson-comment.controller.js';
 export const hierarchyRouter=Router();
 hierarchyRouter.use(requireAuth);
 hierarchyRouter.get('/learning-paths/:learningPathId/hierarchy',getHierarchy);
@@ -8,6 +9,8 @@ hierarchyRouter.post('/learning-paths/:learningPathId/phases',createPhase);
 hierarchyRouter.post('/phases/:phaseId/modules',createModule);
 hierarchyRouter.post('/modules/:moduleId/lessons',createLesson);
 hierarchyRouter.patch('/lessons/:lessonId',patchLesson);
+hierarchyRouter.get('/lessons/:lessonId/comments',listLessonComments);
+hierarchyRouter.post('/lessons/:lessonId/comments',addLessonComment);
 hierarchyRouter.delete('/phases/:phaseId',deletePhase);
 hierarchyRouter.delete('/modules/:moduleId',deleteModule);
 hierarchyRouter.delete('/lessons/:lessonId',deleteLesson);
