@@ -15,8 +15,8 @@ export async function sendPlanCreatedEmail(input: {
   lessonCount?: number;
 }): Promise<void> {
   if (!env.RESEND_API_KEY) return;
-  const user = await UserModel.findById(input.ownerId).select('name email').lean();
-  if (!user?.email) return;
+  const user = await UserModel.findById(input.ownerId).select('name email notificationPreferences').lean();
+  if (!user?.email || user.notificationPreferences?.celebrationEmails === false) return;
 
   const sourceText = input.source === 'imported'
     ? 'Your imported learning plan is ready in LearnFlow.'
