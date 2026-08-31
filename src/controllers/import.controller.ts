@@ -1,0 +1,39 @@
+import type { Response, NextFunction } from 'express';
+import * as XLSX from 'xlsx';
+import { z } from 'zod';
+import type { AuthenticatedRequest } from '../middleware/auth.middleware.js';
+import { LearningPathModel } from '../models/learning-path.model.js';
+import { PhaseModel } from '../models/phase.model.js';
+import { ModuleModel } from '../models/module.model.js';
+import { LessonModel } from '../models/lesson.model.js';
+
+const rowSchema = z.object({
+  'Learning Path': z.string().min(2), 'Phase': z.string().min(1), 'Module': z.string().min(1), 'Lesson': z.string().min(1),
+  'Description': z.string().optional().default(''), 'Date': z.union([z.string(),z.number()]).optional(), 'Time': z.union([z.string(),z.number()]).optional(),
+  'Duration': z.coerce.number().int().min(5).max(480).optional().default(60), 'Priority': z.string().optional(), 'Resource': z.string().optional()
+});
+
+function parseSchedule(dateValue: unknown, timeValue: unknown): Date | undefined {
+  if (!dateValue) return undefined;
+  const date = String(dateValue).trim(); const time = timeValue ? String(timeValue).trim() : '19:00';
+  const parsed = new Date(`${date}T${time.length===5?time:`${time}:00`}`); return Number.isNaN(parsed.getTime()) ? undefined : parsed;
+}
+
+export async function importPlan(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  try {
+    if (!req.file) return res.status(400).json({ message: 'Excel or CSV file is required' });
+    const workbook = XLSX.read(req.file.buffer, { type: 'buffer' }); const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    const rawRows = XLSX.utils.sheet_to_json<Record<string,unknown>>(sheet, { defval: '' });
+    if (!rawRows.length) return res.status(400).json({ message: 'The uploaded file has no lesson rows' });
+    const rows = rawRows.map(row => rowSchema.parse(row)); const ownerId=req.user!.id;
+    const pathTitle=rows[0]['Learning Path']; const learningPath=await LearningPathModel.create({ownerId,title:pathTitle,description:`Imported plan with ${rows.length} lessons`,status:'ACTIVE'});
+    const phaseCache=new Map<string,any>(); const moduleCache=new Map<string,any>(); let imported=0;
+    for (const row of rows) {
+      let phase=phaseCache.get(row.Phase); if(!phase){phase=await PhaseModel.create({ownerId,learningPathId:learningPath._id,title:row.Phase,position:phaseCache.size});phaseCache.set(row.Phase,phase);}
+      const moduleKey=`${phase._id}:${row.Module}`; let module=moduleCache.get(moduleKey); if(!module){module=await ModuleModel.create({ownerId,learningPathId:learningPath._id,phaseId:phase._id,title:row.Module,position:moduleCache.size});moduleCache.set(moduleKey,module);}
+      const scheduledAt=parseSchedule(row.Date,row.Time);
+      await LessonModel.create({ownerId,learningPathId:learningPath._id,phaseId:phase._id,moduleId:module._id,title:row.Lesson,description:row.Description,resourceUrl:row.Resource||undefined,durationMinutes:row.Duration,position:await LessonModel.countDocuments({ownerId,moduleId:module._id}),scheduledAt,status:scheduledAt?'SCHEDULED':'BACKLOG'}); imported++;
+    }
+    res.status(201).json({ learningPathId: learningPath._id, importedLessons: imported });
+  } catch(error){next(error);}
+}

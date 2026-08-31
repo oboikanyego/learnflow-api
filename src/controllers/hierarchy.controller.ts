@@ -1,0 +1,43 @@
+import type { Response, NextFunction } from 'express';
+import { Types } from 'mongoose';
+import { z } from 'zod';
+import type { AuthenticatedRequest } from '../middleware/auth.middleware.js';
+import { LearningPathModel } from '../models/learning-path.model.js';
+import { PhaseModel } from '../models/phase.model.js';
+import { ModuleModel } from '../models/module.model.js';
+import { LessonModel, lessonStatuses } from '../models/lesson.model.js';
+
+const id = z.string().refine(Types.ObjectId.isValid, 'Invalid id');
+const createPhaseSchema = z.object({ title: z.string().min(2).max(150), description: z.string().max(1000).optional(), position: z.number().int().min(0).optional() });
+const createModuleSchema = createPhaseSchema;
+const createLessonSchema = z.object({ title: z.string().min(2).max(180), description: z.string().max(2000).optional(), resourceUrl: z.string().url().optional(), position: z.number().int().min(0).optional(), durationMinutes: z.number().int().min(5).max(480).optional() });
+const patchLessonSchema = z.object({ title: z.string().min(2).max(180).optional(), description: z.string().max(2000).optional(), resourceUrl: z.string().url().nullable().optional(), position: z.number().int().min(0).optional(), status: z.enum(lessonStatuses).optional(), scheduledAt: z.coerce.date().nullable().optional(), durationMinutes: z.number().int().min(5).max(480).optional(), reminderMinutes: z.number().int().min(0).max(10080).optional(), evidenceUrl: z.string().url().nullable().optional(), notes: z.string().max(5000).optional() });
+
+async function ownsPath(ownerId: string, learningPathId: string) { return LearningPathModel.exists({ _id: id.parse(learningPathId), ownerId }); }
+
+export async function getHierarchy(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  try {
+    const ownerId = req.user!.id; const learningPathId = id.parse(req.params.learningPathId);
+    if (!(await ownsPath(ownerId, learningPathId))) return res.status(404).json({ message: 'Learning path not found' });
+    const phases = await PhaseModel.find({ ownerId, learningPathId }).sort({ position: 1 }).lean();
+    const modules = await ModuleModel.find({ ownerId, learningPathId }).sort({ position: 1 }).lean();
+    const lessons = await LessonModel.find({ ownerId, learningPathId }).sort({ position: 1 }).lean();
+    res.json(phases.map(phase => ({ ...phase, modules: modules.filter(m => String(m.phaseId) === String(phase._id)).map(module => ({ ...module, lessons: lessons.filter(l => String(l.moduleId) === String(module._id)) })) })));
+  } catch (error) { next(error); }
+}
+
+export async function createPhase(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  try { const ownerId=req.user!.id; const learningPathId=id.parse(req.params.learningPathId); if (!(await ownsPath(ownerId, learningPathId))) return res.status(404).json({message:'Learning path not found'}); const input=createPhaseSchema.parse(req.body); const position=input.position ?? await PhaseModel.countDocuments({ownerId,learningPathId}); res.status(201).json(await PhaseModel.create({...input,position,ownerId,learningPathId})); } catch(e){next(e);}
+}
+export async function createModule(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  try { const ownerId=req.user!.id; const phaseId=id.parse(req.params.phaseId); const phase=await PhaseModel.findOne({_id:phaseId,ownerId}); if(!phase)return res.status(404).json({message:'Phase not found'}); const input=createModuleSchema.parse(req.body); const position=input.position ?? await ModuleModel.countDocuments({ownerId,phaseId}); res.status(201).json(await ModuleModel.create({...input,position,ownerId,phaseId,learningPathId:phase.learningPathId})); } catch(e){next(e);}
+}
+export async function createLesson(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  try { const ownerId=req.user!.id; const moduleId=id.parse(req.params.moduleId); const module=await ModuleModel.findOne({_id:moduleId,ownerId}); if(!module)return res.status(404).json({message:'Module not found'}); const input=createLessonSchema.parse(req.body); const position=input.position ?? await LessonModel.countDocuments({ownerId,moduleId}); res.status(201).json(await LessonModel.create({...input,position,ownerId,moduleId,phaseId:module.phaseId,learningPathId:module.learningPathId})); } catch(e){next(e);}
+}
+export async function patchLesson(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  try { const ownerId=req.user!.id; const lessonId=id.parse(req.params.lessonId); const input=patchLessonSchema.parse(req.body); const patch:any={...input}; if(input.status==='COMPLETED') patch.completedAt=new Date(); if(input.status!=='COMPLETED'&&input.status) patch.completedAt=null; if(input.scheduledAt) patch.status=input.status ?? 'SCHEDULED'; const lesson=await LessonModel.findOneAndUpdate({_id:lessonId,ownerId},patch,{new:true,runValidators:true}); if(!lesson)return res.status(404).json({message:'Lesson not found'}); res.json(lesson); } catch(e){next(e);}
+}
+export async function deletePhase(req: AuthenticatedRequest,res:Response,next:NextFunction){try{const ownerId=req.user!.id;const phaseId=id.parse(req.params.phaseId);const phase=await PhaseModel.findOneAndDelete({_id:phaseId,ownerId});if(!phase)return res.status(404).json({message:'Phase not found'});await Promise.all([ModuleModel.deleteMany({ownerId,phaseId}),LessonModel.deleteMany({ownerId,phaseId})]);res.status(204).send();}catch(e){next(e);}}
+export async function deleteModule(req:AuthenticatedRequest,res:Response,next:NextFunction){try{const ownerId=req.user!.id;const moduleId=id.parse(req.params.moduleId);const module=await ModuleModel.findOneAndDelete({_id:moduleId,ownerId});if(!module)return res.status(404).json({message:'Module not found'});await LessonModel.deleteMany({ownerId,moduleId});res.status(204).send();}catch(e){next(e);}}
+export async function deleteLesson(req:AuthenticatedRequest,res:Response,next:NextFunction){try{const ownerId=req.user!.id;const lessonId=id.parse(req.params.lessonId);const lesson=await LessonModel.findOneAndDelete({_id:lessonId,ownerId});if(!lesson)return res.status(404).json({message:'Lesson not found'});res.status(204).send();}catch(e){next(e);}}
