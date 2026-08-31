@@ -8,6 +8,7 @@ export interface BillingSettingsSnapshot {
   proYearlyPriceMinor: number;
   graceDays: number;
   enabled: boolean;
+  providerPlanCodes?: { monthly?: string; yearly?: string };
 }
 
 export interface BillingSettingsAuditDocument {
@@ -23,7 +24,11 @@ const snapshotSchema = new Schema<BillingSettingsSnapshot>({
   proMonthlyPriceMinor: { type: Number, required: true },
   proYearlyPriceMinor: { type: Number, required: true },
   graceDays: { type: Number, required: true },
-  enabled: { type: Boolean, required: true }
+  enabled: { type: Boolean, required: true },
+  providerPlanCodes: {
+    monthly: { type: String },
+    yearly: { type: String }
+  }
 }, { _id: false });
 
 const auditSchema = new Schema<BillingSettingsAuditDocument>({
