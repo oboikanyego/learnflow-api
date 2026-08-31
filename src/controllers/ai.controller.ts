@@ -6,6 +6,8 @@ import { PhaseModel } from '../models/phase.model.js';
 import { ModuleModel } from '../models/module.model.js';
 import { LessonModel } from '../models/lesson.model.js';
 import { UserModel } from '../models/user.model.js';
+import { NotificationModel } from '../models/notification.model.js';
+import { AiPlanJobModel } from '../models/ai-plan-job.model.js';
 import { localDateTimeToUtc } from '../utils/timezone.js';
 import { generateAiText, getAiProviderInfo } from '../services/ai-provider.service.js';
 
@@ -13,9 +15,69 @@ const requestSchema=z.object({topic:z.string().min(2).max(120),weeks:z.number().
 const coachSchema=z.object({message:z.string().min(2).max(4000),context:z.string().max(4000).optional()});
 const planSchema=z.object({learningPath:z.object({title:z.string().min(2),description:z.string().optional()}),phases:z.array(z.object({title:z.string().min(1),modules:z.array(z.object({title:z.string().min(1),lessons:z.array(z.object({title:z.string().min(1),description:z.string().optional(),date:z.string(),time:z.string(),durationMinutes:z.number().int().min(5).max(480),resourceUrl:z.string().optional()}))}))}))});
 
+type PlanInput = z.infer<typeof requestSchema>;
+
 async function persistPlan(ownerId:string,timezone:string,rawPlan:unknown){const plan=planSchema.parse(rawPlan);const path=await LearningPathModel.create({ownerId,title:plan.learningPath.title,description:plan.learningPath.description,status:'ACTIVE'});for(let p=0;p<plan.phases.length;p++){const phaseData=plan.phases[p]!;const phase=await PhaseModel.create({ownerId,learningPathId:path._id,title:phaseData.title,position:p});for(let m=0;m<phaseData.modules.length;m++){const moduleData=phaseData.modules[m]!;const module=await ModuleModel.create({ownerId,learningPathId:path._id,phaseId:phase._id,title:moduleData.title,position:m});for(let l=0;l<moduleData.lessons.length;l++){const lesson=moduleData.lessons[l]!;const scheduledAt=localDateTimeToUtc(lesson.date,lesson.time,timezone);await LessonModel.create({ownerId,learningPathId:path._id,phaseId:phase._id,moduleId:module._id,title:lesson.title,description:lesson.description,resourceUrl:lesson.resourceUrl||undefined,durationMinutes:lesson.durationMinutes,position:l,scheduledAt,status:scheduledAt?'SCHEDULED':'BACKLOG'});}}}return path._id;}
 
-export async function generatePlan(req:AuthenticatedRequest,res:Response,next:NextFunction){try{const input=requestSchema.parse(req.body);const provider=getAiProviderInfo();if(!provider.configured)return res.status(503).json({message:`AI plan generation is not configured for ${provider.provider}. Configure an AI provider key on Render.`});const user=await UserModel.findById(req.user!.id).select('timezone').lean();if(!user)return res.status(404).json({message:'User not found'});const prompt=`Create a practical learning plan for ${input.topic}. Duration: ${input.weeks} weeks. Study days: ${input.days.join(', ')}. Start date: ${input.startDate}. Study time: ${input.time} in timezone ${user.timezone}. Session duration: ${input.durationMinutes} minutes. Return ONLY valid JSON with shape {"learningPath":{"title":"...","description":"..."},"phases":[{"title":"...","modules":[{"title":"...","lessons":[{"title":"...","description":"...","date":"YYYY-MM-DD","time":"HH:mm","durationMinutes":60,"resourceUrl":""}]}]}]}. Keep lessons realistic and ordered. Do not include markdown fences.`;const text=await generateAiText(prompt);const parsed=planSchema.parse(JSON.parse(text.replace(/^```json\s*|```$/g,'').trim()));const learningPathId=input.save?await persistPlan(req.user!.id,user.timezone,parsed):undefined;res.json({plan:parsed,learningPathId,timezone:user.timezone,provider:provider.provider});}catch(error){next(error);}}
+function buildPlanPrompt(input:PlanInput,timezone:string){return `Create a practical learning plan for ${input.topic}. Duration: ${input.weeks} weeks. Study days: ${input.days.join(', ')}. Start date: ${input.startDate}. Study time: ${input.time} in timezone ${timezone}. Session duration: ${input.durationMinutes} minutes. Return ONLY valid JSON with shape {"learningPath":{"title":"...","description":"..."},"phases":[{"title":"...","modules":[{"title":"...","lessons":[{"title":"...","description":"...","date":"YYYY-MM-DD","time":"HH:mm","durationMinutes":60,"resourceUrl":""}]}]}]}. Keep lessons realistic and ordered. Do not include markdown fences.`;}
+
+async function createPlan(input:PlanInput,timezone:string){const text=await generateAiText(buildPlanPrompt(input,timezone));return planSchema.parse(JSON.parse(text.replace(/^```json\s*|```$/g,'').trim()));}
+
+async function processPlanJob(jobId:string,ownerId:string,timezone:string,input:PlanInput){
+  try{
+    await AiPlanJobModel.findOneAndUpdate({_id:jobId,ownerId},{status:'PROCESSING',startedAt:new Date(),errorMessage:undefined});
+    const parsed=await createPlan(input,timezone);
+    const learningPathId=input.save?await persistPlan(ownerId,timezone,parsed):undefined;
+    await AiPlanJobModel.findOneAndUpdate({_id:jobId,ownerId},{status:'COMPLETED',plan:parsed,learningPathId,completedAt:new Date()});
+    await NotificationModel.create({
+      ownerId,
+      type:'AI_PLAN_READY',
+      title:'Your learning plan is ready',
+      message:`The ${parsed.learningPath.title} roadmap has finished generating. You can preview it now.`,
+      actionUrl:`/ai-planner?job=${jobId}`
+    });
+  }catch(error){
+    const message=error instanceof Error?error.message:'Learning plan generation failed';
+    await AiPlanJobModel.findOneAndUpdate({_id:jobId,ownerId},{status:'FAILED',errorMessage:message.slice(0,500),completedAt:new Date()});
+    await NotificationModel.create({
+      ownerId,
+      type:'AI_PLAN_FAILED',
+      title:'Learning plan generation failed',
+      message:'We could not finish generating your learning plan. Open the AI planner to try again.',
+      actionUrl:'/ai-planner'
+    });
+  }
+}
+
+export async function generatePlan(req:AuthenticatedRequest,res:Response,next:NextFunction){try{const input=requestSchema.parse(req.body);const provider=getAiProviderInfo();if(!provider.configured)return res.status(503).json({message:`AI plan generation is not configured for ${provider.provider}. Configure an AI provider key on Render.`});const user=await UserModel.findById(req.user!.id).select('timezone').lean();if(!user)return res.status(404).json({message:'User not found'});const parsed=await createPlan(input,user.timezone);const learningPathId=input.save?await persistPlan(req.user!.id,user.timezone,parsed):undefined;res.json({plan:parsed,learningPathId,timezone:user.timezone,provider:provider.provider});}catch(error){next(error);}}
+
+export async function queuePlan(req:AuthenticatedRequest,res:Response,next:NextFunction){
+  try{
+    const input=requestSchema.parse(req.body);
+    const provider=getAiProviderInfo();
+    if(!provider.configured)return res.status(503).json({message:`AI plan generation is not configured for ${provider.provider}. Configure an AI provider key on Render.`});
+    const user=await UserModel.findById(req.user!.id).select('timezone').lean();
+    if(!user)return res.status(404).json({message:'User not found'});
+    const job=await AiPlanJobModel.create({ownerId:req.user!.id,status:'QUEUED',input});
+    setImmediate(()=>{void processPlanJob(job.id,req.user!.id,user.timezone,input);});
+    res.status(202).json({jobId:job.id,status:job.status,message:'Your learning plan is generating in the background. You can continue using LearnFlow and we will notify you when it is ready.'});
+  }catch(error){next(error);}
+}
+
+export async function listPlanJobs(req:AuthenticatedRequest,res:Response,next:NextFunction){
+  try{
+    const jobs=await AiPlanJobModel.find({ownerId:req.user!.id}).sort({createdAt:-1}).limit(20).lean();
+    res.json(jobs);
+  }catch(error){next(error);}
+}
+
+export async function getPlanJob(req:AuthenticatedRequest,res:Response,next:NextFunction){
+  try{
+    const job=await AiPlanJobModel.findOne({_id:req.params.id,ownerId:req.user!.id}).lean();
+    if(!job)return res.status(404).json({message:'Learning plan job not found'});
+    res.json(job);
+  }catch(error){next(error);}
+}
 
 export async function coach(req:AuthenticatedRequest,res:Response,next:NextFunction){try{const input=coachSchema.parse(req.body);const provider=getAiProviderInfo();if(!provider.configured)return res.status(503).json({message:`AI coach is not configured for ${provider.provider}. Configure an AI provider key on Render.`});const prompt=`You are the LearnFlow learning coach. Help the learner understand concepts, unblock study sessions, break work into realistic next steps, and improve consistency. Do not claim to have changed their LearnFlow data and do not invent completion status. Keep the response concise and practical.\n\nOptional learner context:\n${input.context??'No extra context supplied.'}\n\nLearner message:\n${input.message}`;const answer=await generateAiText(prompt);res.json({answer,provider:provider.provider});}catch(error){next(error);}}
 
