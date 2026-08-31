@@ -3,7 +3,7 @@ import jwt from 'jsonwebtoken';
 import { createHash, randomBytes } from 'node:crypto';
 import { env } from '../config/env.js';
 import { userRepository } from '../repositories/user.repository.js';
-import { UserModel, type NotificationPreferences } from '../models/user.model.js';
+import { UserModel, type Entitlement, type NotificationPreferences } from '../models/user.model.js';
 import { brandedEmail } from './email-template.service.js';
 import { emailService } from './email.service.js';
 
@@ -16,19 +16,20 @@ const DEFAULT_PREFERENCES: NotificationPreferences = {
   missedSessionEmails: true,
   celebrationEmails: true
 };
+const DEFAULT_ENTITLEMENT: Entitlement = { plan: 'FREE', status: 'ACTIVE', source: 'SYSTEM' };
 
 export class AuthService {
   async register(input: { name: string; email: string; password: string; timezone: string }) {
     if (await userRepository.findByEmail(input.email)) throw Object.assign(new Error('Email already registered'), { statusCode: 409 });
     const passwordHash = await bcrypt.hash(input.password, 12);
     const user = await userRepository.create({ name: input.name, email: input.email, passwordHash, timezone: input.timezone });
-    return this.toAuthResponse(user.id, user.name, user.email, user.role, user.timezone);
+    return this.toAuthResponse(user.id, user.name, user.email, user.role, user.timezone, DEFAULT_ENTITLEMENT);
   }
 
   async login(email: string, password: string) {
     const user = await userRepository.findByEmail(email, true);
     if (!user || !(await bcrypt.compare(password, user.passwordHash))) throw Object.assign(new Error('Invalid email or password'), { statusCode: 401 });
-    return this.toAuthResponse(user.id, user.name, user.email, user.role, user.timezone);
+    return this.toAuthResponse(user.id, user.name, user.email, user.role, user.timezone, user.entitlement ?? DEFAULT_ENTITLEMENT);
   }
 
   async me(userId: string) {
@@ -40,8 +41,27 @@ export class AuthService {
       email: user.email,
       role: user.role,
       timezone: user.timezone,
+      entitlement: { ...DEFAULT_ENTITLEMENT, ...(user.entitlement ?? {}) },
       notificationPreferences: { ...DEFAULT_PREFERENCES, ...(user.notificationPreferences ?? {}) }
     };
+  }
+
+  async updateProfile(userId: string, input: { name: string; timezone: string }) {
+    const user = await UserModel.findByIdAndUpdate(userId, { $set: { name: input.name, timezone: input.timezone } }, { new: true }).lean();
+    if (!user) throw Object.assign(new Error('User not found'), { statusCode: 404 });
+    return { id: String(user._id), name: user.name, email: user.email, role: user.role, timezone: user.timezone, entitlement: { ...DEFAULT_ENTITLEMENT, ...(user.entitlement ?? {}) } };
+  }
+
+  async changePassword(userId: string, currentPassword: string, newPassword: string) {
+    const user = await UserModel.findById(userId).select('+passwordHash');
+    if (!user) throw Object.assign(new Error('User not found'), { statusCode: 404 });
+    if (!(await bcrypt.compare(currentPassword, user.passwordHash))) throw Object.assign(new Error('Current password is incorrect'), { statusCode: 400 });
+    if (await bcrypt.compare(newPassword, user.passwordHash)) throw Object.assign(new Error('New password must be different from your current password'), { statusCode: 400 });
+    user.passwordHash = await bcrypt.hash(newPassword, 12);
+    user.passwordResetTokenHash = undefined;
+    user.passwordResetExpiresAt = undefined;
+    await user.save();
+    return { message: 'Password changed successfully.' };
   }
 
   async updateNotificationPreferences(userId: string, input: NotificationPreferences) {
@@ -99,9 +119,9 @@ export class AuthService {
     return { message: 'Password updated successfully. You can now sign in with your new password.' };
   }
 
-  private toAuthResponse(id: string, name: string, email: string, role: string, timezone: string) {
+  private toAuthResponse(id: string, name: string, email: string, role: string, timezone: string, entitlement: Entitlement) {
     const token = jwt.sign({ sub: id, role }, env.JWT_SECRET, { expiresIn: env.JWT_EXPIRES_IN as jwt.SignOptions['expiresIn'] });
-    return { token, user: { id, name, email, role, timezone } };
+    return { token, user: { id, name, email, role, timezone, entitlement: { ...DEFAULT_ENTITLEMENT, ...(entitlement ?? {}) } } };
   }
 }
 
