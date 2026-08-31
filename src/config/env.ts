@@ -8,6 +8,8 @@ const schema = z.object({
   CLIENT_ORIGIN: z.string().default('http://localhost:4200'),
   JWT_SECRET: z.string().min(32),
   JWT_EXPIRES_IN: z.string().default('7d'),
+  REDIS_URL: z.string().url().optional(),
+  AI_QUEUE_CONCURRENCY: z.coerce.number().int().min(1).max(10).default(2),
   AI_PROVIDER: z.enum(['openai', 'groq', 'gemini']).optional(),
   OPENAI_API_KEY: z.string().optional(),
   OPENAI_MODEL: z.string().default('gpt-5.6-luna'),
