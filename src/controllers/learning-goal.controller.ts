@@ -55,9 +55,20 @@ export async function updateGoal(req: AuthenticatedRequest, res: Response, next:
       const path = await LearningPathModel.exists({ _id: input.learningPathId, ownerId: req.user!.id });
       if (!path) return res.status(404).json({ message: 'Learning path not found' });
     }
+
+    const set: Record<string, unknown> = {};
+    const unset: Record<string, 1> = {};
+    for (const [key, value] of Object.entries(input)) {
+      if (value === null && (key === 'learningPathId' || key === 'targetDate')) unset[key] = 1;
+      else if (value !== undefined) set[key] = value;
+    }
+    const update: Record<string, unknown> = {};
+    if (Object.keys(set).length) update.$set = set;
+    if (Object.keys(unset).length) update.$unset = unset;
+
     const goal = await LearningGoalModel.findOneAndUpdate(
       { _id: req.params.id, ownerId: req.user!.id },
-      { ...input, ...(input.learningPathId === null ? { $unset: { learningPathId: 1 } } : {}), ...(input.targetDate === null ? { $unset: { targetDate: 1 } } : {}) },
+      update,
       { new: true, runValidators: true }
     ).lean();
     if (!goal) return res.status(404).json({ message: 'Learning goal not found' });
