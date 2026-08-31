@@ -1,0 +1,17 @@
+import type { NextFunction, Request, Response } from 'express';
+import { z } from 'zod';
+import type { AuthenticatedRequest } from '../middleware/auth.middleware.js';
+import { authService } from '../services/auth.service.js';
+
+const registerSchema = z.object({ name: z.string().trim().min(2).max(80), email: z.email(), password: z.string().min(8).max(128) });
+const loginSchema = z.object({ email: z.email(), password: z.string().min(8).max(128) });
+
+export async function register(req: Request, res: Response, next: NextFunction) {
+  try { res.status(201).json(await authService.register(registerSchema.parse(req.body))); } catch (error) { next(error); }
+}
+export async function login(req: Request, res: Response, next: NextFunction) {
+  try { const input = loginSchema.parse(req.body); res.json(await authService.login(input.email, input.password)); } catch (error) { next(error); }
+}
+export async function me(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  try { res.json(await authService.me(req.user!.id)); } catch (error) { next(error); }
+}
