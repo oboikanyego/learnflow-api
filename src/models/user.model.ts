@@ -6,6 +6,7 @@ export interface NotificationPreferences {
   reminderMinutes: number;
   missedSessionEmails: boolean;
   celebrationEmails: boolean;
+  weeklyReviewEmails: boolean;
 }
 
 export type EntitlementPlan = 'FREE' | 'PRO';
@@ -53,7 +54,8 @@ const userSchema = new Schema<UserDocument>({
     emailReminders: { type: Boolean, default: true },
     reminderMinutes: { type: Number, default: 30, min: 5, max: 1440 },
     missedSessionEmails: { type: Boolean, default: true },
-    celebrationEmails: { type: Boolean, default: true }
+    celebrationEmails: { type: Boolean, default: true },
+    weeklyReviewEmails: { type: Boolean, default: false }
   },
   passwordResetTokenHash: { type: String, select: false },
   passwordResetExpiresAt: { type: Date, select: false }
