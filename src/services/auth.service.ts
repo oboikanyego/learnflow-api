@@ -4,8 +4,8 @@ import { createHash, randomBytes } from 'node:crypto';
 import { env } from '../config/env.js';
 import { userRepository } from '../repositories/user.repository.js';
 import { UserModel, type NotificationPreferences } from '../models/user.model.js';
+import { brandedEmail } from './email-template.service.js';
 import { emailService } from './email.service.js';
-import { passwordResetEmail } from '../templates/email-templates.js';
 
 const RESET_TTL_MS = 30 * 60 * 1000;
 const GENERIC_RESET_MESSAGE = 'If an account exists for that email, a password reset link has been sent.';
@@ -60,7 +60,22 @@ export class AuthService {
     await UserModel.updateOne({ _id: user._id }, { $set: { passwordResetTokenHash: tokenHash, passwordResetExpiresAt: expiresAt } });
 
     const resetUrl = `${env.CLIENT_ORIGIN.replace(/\/$/, '')}/reset-password?token=${encodeURIComponent(rawToken)}`;
-    if (env.RESEND_API_KEY) await emailService.sendTemplate(user.email, passwordResetEmail(user.name, resetUrl));
+    if (env.RESEND_API_KEY) {
+      const emailTemplate = brandedEmail({
+        preheader: 'Reset your LearnFlow password securely',
+        eyebrow: 'Account security',
+        title: 'Reset your LearnFlow password',
+        greeting: user.name,
+        body: [
+          'We received a request to reset the password for your LearnFlow account.',
+          'Use the secure button below to choose a new password. The link expires after 30 minutes.'
+        ],
+        ctaLabel: 'Reset password',
+        ctaUrl: resetUrl,
+        note: 'If you did not request a password reset, you can safely ignore this email.'
+      });
+      await emailService.send({ to: user.email, subject: 'Reset your LearnFlow password', ...emailTemplate });
+    }
 
     return {
       message: GENERIC_RESET_MESSAGE,
