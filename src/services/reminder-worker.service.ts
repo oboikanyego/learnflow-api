@@ -27,13 +27,19 @@ export class ReminderWorkerService {
     const now = new Date(); let reminders = 0; let missedCount = 0;
     const reminderCandidates = await LessonModel.find({ status: 'SCHEDULED', scheduledAt: { $exists: true }, reminderSentAt: { $exists: false } }).limit(500);
     for (const lesson of reminderCandidates) {
-      const remindAt = new Date(lesson.scheduledAt!.getTime() - lesson.reminderMinutes * MINUTE);
+      const user = await UserModel.findById(lesson.ownerId).select('name email timezone notificationPreferences').lean();
+      if (!user) continue;
+      const reminderMinutes = user.notificationPreferences?.reminderMinutes ?? lesson.reminderMinutes ?? 30;
+      const remindAt = new Date(lesson.scheduledAt!.getTime() - reminderMinutes * MINUTE);
       if (remindAt > now) continue;
+
       const title = 'Your learning session is coming up';
       const message = `${lesson.title} is coming up soon. Open LearnFlow when you are ready to begin.`;
-      await NotificationModel.create({ ownerId: lesson.ownerId, lessonId: lesson._id, type: 'REMINDER', title, message });
-      const user = await UserModel.findById(lesson.ownerId).select('name email timezone').lean();
-      if (user?.email) {
+      if (user.notificationPreferences?.inAppReminders !== false) {
+        await NotificationModel.create({ ownerId: lesson.ownerId, lessonId: lesson._id, type: 'REMINDER', title, message });
+      }
+
+      if (user.email && user.notificationPreferences?.emailReminders !== false) {
         const scheduled = formatScheduledAt(lesson.scheduledAt!, user.timezone || 'UTC');
         const email = brandedEmail({
           preheader: `${lesson.title} is scheduled for ${scheduled}`,
@@ -47,7 +53,8 @@ export class ReminderWorkerService {
           detailRows: [
             { label: 'Lesson', value: lesson.title },
             { label: 'Scheduled', value: scheduled },
-            { label: 'Duration', value: `${lesson.durationMinutes} minutes` }
+            { label: 'Duration', value: `${lesson.durationMinutes} minutes` },
+            { label: 'Reminder', value: `${reminderMinutes} minutes before` }
           ],
           ctaLabel: 'Open learning board',
           ctaUrl: clientUrl('/board'),
@@ -65,8 +72,8 @@ export class ReminderWorkerService {
       const title = 'A learning session needs your attention';
       const message = `${lesson.title} was not completed. Open LearnFlow to reschedule it when it works for you.`;
       await NotificationModel.create({ ownerId: lesson.ownerId, lessonId: lesson._id, type: 'MISSED', title, message });
-      const user = await UserModel.findById(lesson.ownerId).select('name email timezone').lean();
-      if (user?.email) {
+      const user = await UserModel.findById(lesson.ownerId).select('name email timezone notificationPreferences').lean();
+      if (user?.email && user.notificationPreferences?.missedSessionEmails !== false) {
         const scheduled = formatScheduledAt(lesson.scheduledAt!, user.timezone || 'UTC');
         const email = brandedEmail({
           preheader: `${lesson.title} was not completed as scheduled`,
