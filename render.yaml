@@ -17,6 +17,10 @@ services:
         sync: false
       - key: JWT_EXPIRES_IN
         value: 7d
+      - key: REDIS_URL
+        sync: false
+      - key: AI_QUEUE_CONCURRENCY
+        value: 2
       - key: OPENAI_API_KEY
         sync: false
       - key: OPENAI_MODEL
