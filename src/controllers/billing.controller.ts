@@ -93,7 +93,7 @@ export async function paystackWebhook(req: Request, res: Response, next: NextFun
     if (!status) return res.status(200).json({ received: true, ignored: true });
 
     const userId = await resolveUserId(data);
-    if (!userId) return res.status(202).json({ received: true, unresolved: true });
+    if (!userId) return res.status(503).json({ message: 'Valid Paystack event could not yet be mapped to a LearnFlow user. Retry required.' });
 
     const providerEventId = crypto.createHash('sha256').update(JSON.stringify(req.body)).digest('hex');
     await processBillingLifecycleEvent({
