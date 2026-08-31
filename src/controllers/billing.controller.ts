@@ -5,6 +5,7 @@ import type { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import { SubscriptionModel } from '../models/subscription.model.js';
 import { UserModel } from '../models/user.model.js';
 import { billingCatalog, cancelSubscription, createCheckout, getUserSubscription, processBillingLifecycleEvent, type BillingLifecycleEvent } from '../services/billing.service.js';
+import { markBillingEventFailed, markBillingEventIgnored, markBillingEventProcessed, registerBillingEvent } from '../services/billing-event.service.js';
 import { verifyPaystackWebhook } from '../services/paystack.service.js';
 
 const checkoutSchema = z.object({ interval: z.enum(['MONTHLY', 'YEARLY']).default('MONTHLY') });
@@ -89,33 +90,79 @@ export async function paystackWebhook(req: Request, res: Response, next: NextFun
 
     const eventName = String(req.body?.event ?? '');
     const data = (req.body?.data ?? {}) as PaystackData;
-    const status = lifecycleStatus(eventName, data);
-    if (!status) return res.status(200).json({ received: true, ignored: true });
-
-    const userId = await resolveUserId(data);
-    if (!userId) return res.status(503).json({ message: 'Valid Paystack event could not yet be mapped to a LearnFlow user. Retry required.' });
-
-    const providerEventId = crypto.createHash('sha256').update(JSON.stringify(req.body)).digest('hex');
-    await processBillingLifecycleEvent({
+    const payloadHash = crypto.createHash('sha256').update(JSON.stringify(req.body)).digest('hex');
+    const providerEventId = payloadHash;
+    const registration = await registerBillingEvent({
       provider: 'PAYSTACK',
-      eventId: providerEventId,
-      userId,
-      providerCustomerId: data.customer?.customer_code ? String(data.customer.customer_code) : undefined,
-      providerSubscriptionId: subscriptionCode(data),
-      providerPlanId: planCode(data),
-      providerCancellationToken: data.email_token ?? data.subscription?.email_token,
-      status,
-      amountMinor: typeof data.amount === 'number' ? data.amount : undefined,
-      currency: data.currency,
-      billingInterval: interval(data),
-      currentPeriodStart: date(data.period_start),
-      currentPeriodEnd: date(data.period_end),
-      lastPaymentAt: date(data.paid_at),
-      nextBillingAt: date(data.next_payment_date ?? data.subscription?.next_payment_date),
-      cancelAtPeriodEnd: status === 'CANCEL_AT_PERIOD_END',
-      metadata: { paystackEvent: eventName, invoiceCode: data.invoice_code, reference: data.reference }
+      providerEventId,
+      eventType: eventName || 'unknown',
+      payloadHash,
+      metadata: {
+        subscriptionCode: subscriptionCode(data),
+        planCode: planCode(data),
+        reference: data.reference,
+        invoiceCode: data.invoice_code
+      }
     });
 
-    return res.status(200).json({ received: true });
+    if (registration.action === 'DUPLICATE') {
+      return res.status(200).json({ received: true, duplicate: true, status: registration.status });
+    }
+
+    if (registration.action === 'IN_PROGRESS') {
+      return res.status(503).json({ received: true, retry: true, message: 'Billing event is already being processed. Retry required.' });
+    }
+
+    const billingEventId = registration.eventId;
+    const status = lifecycleStatus(eventName, data);
+    if (!status) {
+      await markBillingEventIgnored(billingEventId, {
+        paystackEvent: eventName,
+        reason: 'Unsupported billing lifecycle event'
+      });
+      return res.status(200).json({ received: true, ignored: true });
+    }
+
+    const userId = await resolveUserId(data);
+    if (!userId) {
+      const error = new Error('Valid Paystack event could not yet be mapped to a LearnFlow user. Retry required.');
+      await markBillingEventFailed(billingEventId, error);
+      return res.status(503).json({ message: error.message });
+    }
+
+    try {
+      await processBillingLifecycleEvent({
+        provider: 'PAYSTACK',
+        eventId: providerEventId,
+        userId,
+        providerCustomerId: data.customer?.customer_code ? String(data.customer.customer_code) : undefined,
+        providerSubscriptionId: subscriptionCode(data),
+        providerPlanId: planCode(data),
+        providerCancellationToken: data.email_token ?? data.subscription?.email_token,
+        status,
+        amountMinor: typeof data.amount === 'number' ? data.amount : undefined,
+        currency: data.currency,
+        billingInterval: interval(data),
+        currentPeriodStart: date(data.period_start),
+        currentPeriodEnd: date(data.period_end),
+        lastPaymentAt: date(data.paid_at),
+        nextBillingAt: date(data.next_payment_date ?? data.subscription?.next_payment_date),
+        cancelAtPeriodEnd: status === 'CANCEL_AT_PERIOD_END',
+        metadata: { paystackEvent: eventName, invoiceCode: data.invoice_code, reference: data.reference }
+      });
+
+      await markBillingEventProcessed(billingEventId, userId, {
+        paystackEvent: eventName,
+        lifecycleStatus: status,
+        subscriptionCode: subscriptionCode(data),
+        planCode: planCode(data),
+        reference: data.reference,
+        invoiceCode: data.invoice_code
+      });
+      return res.status(200).json({ received: true });
+    } catch (error) {
+      await markBillingEventFailed(billingEventId, error, userId);
+      throw error;
+    }
   } catch (error) { next(error); }
 }
