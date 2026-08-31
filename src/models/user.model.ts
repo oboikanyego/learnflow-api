@@ -8,6 +8,17 @@ export interface NotificationPreferences {
   celebrationEmails: boolean;
 }
 
+export type EntitlementPlan = 'FREE' | 'PRO';
+export type EntitlementStatus = 'ACTIVE' | 'INACTIVE' | 'GRACE';
+
+export interface Entitlement {
+  plan: EntitlementPlan;
+  status: EntitlementStatus;
+  source: 'SYSTEM' | 'ADMIN' | 'BILLING';
+  startsAt?: Date;
+  endsAt?: Date;
+}
+
 export interface UserDocument {
   name: string;
   email: string;
@@ -15,6 +26,7 @@ export interface UserDocument {
   timezone: string;
   role: 'learner' | 'admin';
   lastSeenAt?: Date;
+  entitlement: Entitlement;
   notificationPreferences: NotificationPreferences;
   passwordResetTokenHash?: string;
   passwordResetExpiresAt?: Date;
@@ -29,6 +41,13 @@ const userSchema = new Schema<UserDocument>({
   timezone: { type: String, required: true, default: 'UTC' },
   role: { type: String, enum: ['learner', 'admin'], default: 'learner' },
   lastSeenAt: { type: Date, index: true },
+  entitlement: {
+    plan: { type: String, enum: ['FREE', 'PRO'], default: 'FREE' },
+    status: { type: String, enum: ['ACTIVE', 'INACTIVE', 'GRACE'], default: 'ACTIVE' },
+    source: { type: String, enum: ['SYSTEM', 'ADMIN', 'BILLING'], default: 'SYSTEM' },
+    startsAt: { type: Date },
+    endsAt: { type: Date }
+  },
   notificationPreferences: {
     inAppReminders: { type: Boolean, default: true },
     emailReminders: { type: Boolean, default: true },
