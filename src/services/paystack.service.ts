@@ -4,7 +4,7 @@ import { env } from '../config/env.js';
 const PAYSTACK_BASE_URL = 'https://api.paystack.co';
 
 function secretKey() {
-  if (!env.BILLING_API_KEY) throw Object.assign(new Error('Paystack secret key is not configured.'), { statusCode: 503 });
+  if (!env.BILLING_API_KEY) throw Object.assign(new Error('Paystack secret key is not configured.'), { statusCode: 503, exposeMessage: true });
   return env.BILLING_API_KEY;
 }
 
@@ -19,7 +19,10 @@ async function paystackRequest<T>(path: string, init: RequestInit): Promise<T> {
   });
   const body = await response.json().catch(() => null) as { status?: boolean; message?: string; data?: T } | null;
   if (!response.ok || !body?.status) {
-    throw Object.assign(new Error(body?.message ?? `Paystack request failed with HTTP ${response.status}.`), { statusCode: 502 });
+    throw Object.assign(
+      new Error(body?.message ?? `Paystack request failed with HTTP ${response.status}.`),
+      { statusCode: 502, exposeMessage: true }
+    );
   }
   return body.data as T;
 }
