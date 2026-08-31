@@ -5,8 +5,8 @@ import { billingCatalog, cancelSubscription, createCheckout, getUserSubscription
 
 const checkoutSchema = z.object({ interval: z.enum(['MONTHLY', 'YEARLY']).default('MONTHLY') });
 
-export async function getCatalog(_req: AuthenticatedRequest, res: Response) {
-  res.json(billingCatalog());
+export async function getCatalog(_req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  try { res.json(await billingCatalog()); } catch (error) { next(error); }
 }
 
 export async function getSubscription(req: AuthenticatedRequest, res: Response, next: NextFunction) {
