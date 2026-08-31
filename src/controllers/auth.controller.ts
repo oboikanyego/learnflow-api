@@ -11,12 +11,20 @@ const registerSchema = z.object({
   timezone: z.string().refine(isValidTimeZone, 'Invalid IANA timezone').default('UTC')
 });
 const loginSchema = z.object({ email: z.email(), password: z.string().min(8).max(128) });
+const forgotPasswordSchema = z.object({ email: z.email() });
+const resetPasswordSchema = z.object({ token: z.string().min(32), password: z.string().min(8).max(128) });
 
 export async function register(req: Request, res: Response, next: NextFunction) {
   try { res.status(201).json(await authService.register(registerSchema.parse(req.body))); } catch (error) { next(error); }
 }
 export async function login(req: Request, res: Response, next: NextFunction) {
   try { const input = loginSchema.parse(req.body); res.json(await authService.login(input.email, input.password)); } catch (error) { next(error); }
+}
+export async function forgotPassword(req: Request, res: Response, next: NextFunction) {
+  try { const input = forgotPasswordSchema.parse(req.body); res.json(await authService.forgotPassword(input.email)); } catch (error) { next(error); }
+}
+export async function resetPassword(req: Request, res: Response, next: NextFunction) {
+  try { const input = resetPasswordSchema.parse(req.body); res.json(await authService.resetPassword(input.token, input.password)); } catch (error) { next(error); }
 }
 export async function me(req: AuthenticatedRequest, res: Response, next: NextFunction) {
   try { res.json(await authService.me(req.user!.id)); } catch (error) { next(error); }
