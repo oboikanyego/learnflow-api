@@ -4,28 +4,28 @@ import { env } from '../config/env.js';
 import { userRepository } from '../repositories/user.repository.js';
 
 export class AuthService {
-  async register(input: { name: string; email: string; password: string }) {
+  async register(input: { name: string; email: string; password: string; timezone: string }) {
     if (await userRepository.findByEmail(input.email)) throw Object.assign(new Error('Email already registered'), { statusCode: 409 });
     const passwordHash = await bcrypt.hash(input.password, 12);
-    const user = await userRepository.create({ name: input.name, email: input.email, passwordHash });
-    return this.toAuthResponse(user.id, user.name, user.email, user.role);
+    const user = await userRepository.create({ name: input.name, email: input.email, passwordHash, timezone: input.timezone });
+    return this.toAuthResponse(user.id, user.name, user.email, user.role, user.timezone);
   }
 
   async login(email: string, password: string) {
     const user = await userRepository.findByEmail(email, true);
     if (!user || !(await bcrypt.compare(password, user.passwordHash))) throw Object.assign(new Error('Invalid email or password'), { statusCode: 401 });
-    return this.toAuthResponse(user.id, user.name, user.email, user.role);
+    return this.toAuthResponse(user.id, user.name, user.email, user.role, user.timezone);
   }
 
   async me(userId: string) {
     const user = await userRepository.findById(userId);
     if (!user) throw Object.assign(new Error('User not found'), { statusCode: 404 });
-    return { id: user.id, name: user.name, email: user.email, role: user.role };
+    return { id: user.id, name: user.name, email: user.email, role: user.role, timezone: user.timezone };
   }
 
-  private toAuthResponse(id: string, name: string, email: string, role: string) {
+  private toAuthResponse(id: string, name: string, email: string, role: string, timezone: string) {
     const token = jwt.sign({ sub: id, role }, env.JWT_SECRET, { expiresIn: env.JWT_EXPIRES_IN as jwt.SignOptions['expiresIn'] });
-    return { token, user: { id, name, email, role } };
+    return { token, user: { id, name, email, role, timezone } };
   }
 }
 

@@ -1,0 +1,23 @@
+import type { Response, NextFunction } from 'express';
+import * as XLSX from 'xlsx';
+import { z } from 'zod';
+import type { AuthenticatedRequest } from '../middleware/auth.middleware.js';
+import { LearningPathModel } from '../models/learning-path.model.js';
+import { PhaseModel } from '../models/phase.model.js';
+import { ModuleModel } from '../models/module.model.js';
+import { LessonModel } from '../models/lesson.model.js';
+import { UserModel } from '../models/user.model.js';
+import { localDateTimeToUtc } from '../utils/timezone.js';
+
+const rowSchema=z.object({'Learning Path':z.string().min(2),'Phase':z.string().min(1),'Module':z.string().min(1),'Lesson':z.string().min(1),'Description':z.string().optional().default(''),'Date':z.union([z.string(),z.number()]).optional(),'Time':z.union([z.string(),z.number()]).optional(),'Duration':z.coerce.number().int().min(5).max(480).optional().default(60),'Priority':z.string().optional(),'Resource':z.string().optional()});
+function parseSchedule(dateValue:unknown,timeValue:unknown,timeZone:string){if(!dateValue)return undefined;const date=String(dateValue).trim();const time=timeValue?String(timeValue).trim():'19:00';return localDateTimeToUtc(date,time,timeZone);}
+
+export async function importPlan(req:AuthenticatedRequest,res:Response,next:NextFunction){try{
+  if(!req.file)return res.status(400).json({message:'Excel or CSV file is required'});
+  const workbook=XLSX.read(req.file.buffer,{type:'buffer'});const sheetName=workbook.SheetNames[0];if(!sheetName)return res.status(400).json({message:'Workbook contains no sheets'});const sheet=workbook.Sheets[sheetName];if(!sheet)return res.status(400).json({message:'Unable to read workbook sheet'});
+  const rawRows=XLSX.utils.sheet_to_json<Record<string,unknown>>(sheet,{defval:''});if(!rawRows.length)return res.status(400).json({message:'The uploaded file has no lesson rows'});const rows=rawRows.map(row=>rowSchema.parse(row));
+  const ownerId=req.user!.id;const user=await UserModel.findById(ownerId).select('timezone').lean();if(!user)return res.status(404).json({message:'User not found'});const first=rows[0]!;
+  const learningPath=await LearningPathModel.create({ownerId,title:first['Learning Path'],description:`Imported plan with ${rows.length} lessons`,status:'ACTIVE'});const phaseCache=new Map<string,InstanceType<typeof PhaseModel>>();const moduleCache=new Map<string,InstanceType<typeof ModuleModel>>();let imported=0;
+  for(const row of rows){let phase=phaseCache.get(row.Phase);if(!phase){phase=await PhaseModel.create({ownerId,learningPathId:learningPath._id,title:row.Phase,position:phaseCache.size});phaseCache.set(row.Phase,phase);}const moduleKey=`${String(phase._id)}:${row.Module}`;let module=moduleCache.get(moduleKey);if(!module){module=await ModuleModel.create({ownerId,learningPathId:learningPath._id,phaseId:phase._id,title:row.Module,position:moduleCache.size});moduleCache.set(moduleKey,module);}const scheduledAt=parseSchedule(row.Date,row.Time,user.timezone);await LessonModel.create({ownerId,learningPathId:learningPath._id,phaseId:phase._id,moduleId:module._id,title:row.Lesson,description:row.Description,resourceUrl:row.Resource||undefined,durationMinutes:row.Duration,position:await LessonModel.countDocuments({ownerId,moduleId:module._id}),scheduledAt,status:scheduledAt?'SCHEDULED':'BACKLOG'});imported++;}
+  res.status(201).json({learningPathId:learningPath._id,importedLessons:imported,timezone:user.timezone});
+}catch(error){next(error);}}

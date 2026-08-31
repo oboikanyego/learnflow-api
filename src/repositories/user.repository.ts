@@ -8,7 +8,7 @@ export class UserRepository {
 
   findById(id: string) { return UserModel.findById(id); }
 
-  create(input: { name: string; email: string; passwordHash: string }) {
+  create(input: { name: string; email: string; passwordHash: string; timezone: string }) {
     return UserModel.create({ ...input, email: input.email.toLowerCase() });
   }
 }
