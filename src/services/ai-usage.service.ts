@@ -1,5 +1,6 @@
 import { env } from '../config/env.js';
 import { AiUsageModel, type AiUsageFeature } from '../models/ai-usage.model.js';
+import { UserModel, type EntitlementPlan } from '../models/user.model.js';
 import { getAiProviderInfo } from './ai-provider.service.js';
 
 function startOfUtcDay(now = new Date()): Date {
@@ -10,7 +11,9 @@ function startOfUtcMonth(now = new Date()): Date {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
 }
 
-function limits(feature: AiUsageFeature) {
+function limits(feature: AiUsageFeature, _plan: EntitlementPlan) {
+  // FREE and PRO intentionally share limits until commercial entitlements are launched.
+  // Keeping plan in this resolver means billing can introduce PRO limits without changing callers.
   return feature === 'PLAN'
     ? { daily: env.AI_PLAN_DAILY_LIMIT, monthly: env.AI_PLAN_MONTHLY_LIMIT }
     : { daily: env.AI_COACH_DAILY_LIMIT, monthly: env.AI_COACH_MONTHLY_LIMIT };
@@ -22,25 +25,30 @@ export async function getUserAiUsage(ownerId: string) {
   const monthStart = startOfUtcMonth(now);
   const counted = { status: { $in: ['ACCEPTED', 'SUCCEEDED', 'FAILED'] } };
 
-  const [planDaily, planMonthly, coachDaily, coachMonthly] = await Promise.all([
+  const [user, planDaily, planMonthly, coachDaily, coachMonthly] = await Promise.all([
+    UserModel.findById(ownerId).select('entitlement').lean(),
     AiUsageModel.countDocuments({ ownerId, feature: 'PLAN', createdAt: { $gte: dayStart }, ...counted }),
     AiUsageModel.countDocuments({ ownerId, feature: 'PLAN', createdAt: { $gte: monthStart }, ...counted }),
     AiUsageModel.countDocuments({ ownerId, feature: 'COACH', createdAt: { $gte: dayStart }, ...counted }),
     AiUsageModel.countDocuments({ ownerId, feature: 'COACH', createdAt: { $gte: monthStart }, ...counted })
   ]);
+  const plan: EntitlementPlan = user?.entitlement?.plan ?? 'FREE';
+  const planLimits = limits('PLAN', plan);
+  const coachLimits = limits('COACH', plan);
 
   return {
+    entitlement: { plan, status: user?.entitlement?.status ?? 'ACTIVE' },
     resetsAt: {
       daily: new Date(dayStart.getTime() + 24 * 60 * 60_000),
       monthly: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1))
     },
     plan: {
-      daily: { used: planDaily, limit: env.AI_PLAN_DAILY_LIMIT, remaining: Math.max(0, env.AI_PLAN_DAILY_LIMIT - planDaily) },
-      monthly: { used: planMonthly, limit: env.AI_PLAN_MONTHLY_LIMIT, remaining: Math.max(0, env.AI_PLAN_MONTHLY_LIMIT - planMonthly) }
+      daily: { used: planDaily, limit: planLimits.daily, remaining: Math.max(0, planLimits.daily - planDaily) },
+      monthly: { used: planMonthly, limit: planLimits.monthly, remaining: Math.max(0, planLimits.monthly - planMonthly) }
     },
     coach: {
-      daily: { used: coachDaily, limit: env.AI_COACH_DAILY_LIMIT, remaining: Math.max(0, env.AI_COACH_DAILY_LIMIT - coachDaily) },
-      monthly: { used: coachMonthly, limit: env.AI_COACH_MONTHLY_LIMIT, remaining: Math.max(0, env.AI_COACH_MONTHLY_LIMIT - coachMonthly) }
+      daily: { used: coachDaily, limit: coachLimits.daily, remaining: Math.max(0, coachLimits.daily - coachDaily) },
+      monthly: { used: coachMonthly, limit: coachLimits.monthly, remaining: Math.max(0, coachLimits.monthly - coachMonthly) }
     }
   };
 }
@@ -50,12 +58,13 @@ export async function reserveAiUsage(ownerId: string, role: string, feature: AiU
   if (role !== 'admin') {
     const usage = await getUserAiUsage(ownerId);
     const featureUsage = feature === 'PLAN' ? usage.plan : usage.coach;
-    const configured = limits(feature);
+    const configured = limits(feature, usage.entitlement.plan);
     if (featureUsage.daily.used >= configured.daily || featureUsage.monthly.used >= configured.monthly) {
       await AiUsageModel.create({ ownerId, feature, status: 'REJECTED_QUOTA', provider: provider.provider, model: provider.model, completedAt: new Date(), metadata });
       const error = Object.assign(new Error(`${feature === 'PLAN' ? 'AI planner' : 'AI coach'} quota reached. Your allowance will reset automatically.`), {
         statusCode: 429,
         quota: featureUsage,
+        entitlement: usage.entitlement,
         resetsAt: usage.resetsAt
       });
       throw error;
