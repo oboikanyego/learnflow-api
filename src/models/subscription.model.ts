@@ -17,6 +17,8 @@ export interface SubscriptionDocument {
   billingInterval: 'MONTHLY' | 'YEARLY';
   currentPeriodStart?: Date;
   currentPeriodEnd?: Date;
+  graceEndsAt?: Date;
+  graceExpiredAt?: Date;
   cancelAtPeriodEnd: boolean;
   cancelledAt?: Date;
   lastPaymentAt?: Date;
@@ -40,6 +42,8 @@ const subscriptionSchema = new Schema<SubscriptionDocument>({
   billingInterval: { type: String, enum: ['MONTHLY', 'YEARLY'], required: true, default: 'MONTHLY' },
   currentPeriodStart: Date,
   currentPeriodEnd: Date,
+  graceEndsAt: { type: Date, index: true },
+  graceExpiredAt: Date,
   cancelAtPeriodEnd: { type: Boolean, default: false },
   cancelledAt: Date,
   lastPaymentAt: Date,
@@ -48,5 +52,6 @@ const subscriptionSchema = new Schema<SubscriptionDocument>({
 }, { timestamps: true });
 
 subscriptionSchema.index({ provider: 1, providerSubscriptionId: 1 }, { sparse: true });
+subscriptionSchema.index({ status: 1, graceEndsAt: 1, graceExpiredAt: 1 });
 
 export const SubscriptionModel = model<SubscriptionDocument>('Subscription', subscriptionSchema);
