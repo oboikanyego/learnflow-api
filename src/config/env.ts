@@ -25,6 +25,10 @@ const schema = z.object({
   PRO_AI_PLAN_MONTHLY_LIMIT: z.coerce.number().int().min(1).max(10000).default(150),
   PRO_AI_COACH_DAILY_LIMIT: z.coerce.number().int().min(1).max(5000).default(100),
   PRO_AI_COACH_MONTHLY_LIMIT: z.coerce.number().int().min(1).max(50000).default(1500),
+  BILLING_PROVIDER: z.enum(['UNCONFIGURED', 'PAYSTACK', 'PEACH', 'YOCO', 'OZOW', 'STRIPE']).default('UNCONFIGURED'),
+  PRO_MONTHLY_PRICE_ZAR_CENTS: z.coerce.number().int().min(0).default(9900),
+  PRO_YEARLY_PRICE_ZAR_CENTS: z.coerce.number().int().min(0).default(99000),
+  BILLING_GRACE_DAYS: z.coerce.number().int().min(0).max(30).default(3),
   RESEND_API_KEY: z.string().optional(),
   EMAIL_FROM: z.string().default('LearnFlow <onboarding@resend.dev>'),
   REMINDER_CRON_SECRET: z.string().min(24).optional()
