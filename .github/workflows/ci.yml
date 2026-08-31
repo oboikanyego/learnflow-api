@@ -14,3 +14,14 @@ jobs:
       - run: npm install
       - run: npm run typecheck
       - run: npm run build
+      - run: npm prune --omit=dev
+      - uses: actions/upload-artifact@v4
+        with:
+          name: learnflow-api-runtime
+          path: |
+            dist
+            node_modules
+            package.json
+            render.yaml
+          if-no-files-found: error
+          retention-days: 3
