@@ -4,6 +4,8 @@ import { createHash, randomBytes } from 'node:crypto';
 import { env } from '../config/env.js';
 import { userRepository } from '../repositories/user.repository.js';
 import { UserModel } from '../models/user.model.js';
+import { brandedEmail } from './email-template.service.js';
+import { emailService } from './email.service.js';
 
 const RESET_TTL_MS = 30 * 60 * 1000;
 const GENERIC_RESET_MESSAGE = 'If an account exists for that email, a password reset link has been sent.';
@@ -63,24 +65,20 @@ export class AuthService {
   }
 
   private async sendResetEmail(email: string, name: string, resetUrl: string) {
-    const response = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${env.RESEND_API_KEY}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        from: env.EMAIL_FROM,
-        to: [email],
-        subject: 'Reset your LearnFlow password',
-        html: `<p>Hi ${this.escapeHtml(name)},</p><p>We received a request to reset your LearnFlow password.</p><p><a href="${resetUrl}">Reset your password</a></p><p>This link expires in 30 minutes. If you did not request this, you can ignore this email.</p>`
-      })
+    const content = brandedEmail({
+      preheader: 'Reset your LearnFlow password securely',
+      eyebrow: 'Account security',
+      title: 'Reset your LearnFlow password',
+      greeting: name,
+      body: [
+        'We received a request to reset the password for your LearnFlow account.',
+        'Use the secure button below to choose a new password. The link expires after 30 minutes.'
+      ],
+      ctaLabel: 'Reset password',
+      ctaUrl: resetUrl,
+      note: 'If you did not request this password reset, you can safely ignore this email. Your existing password will remain unchanged.'
     });
-    if (!response.ok) throw new Error(`Password reset email failed (${response.status})`);
-  }
-
-  private escapeHtml(value: string) {
-    return value.replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char] ?? char);
+    await emailService.send({ to: email, subject: 'Reset your LearnFlow password', ...content });
   }
 
   private toAuthResponse(id: string, name: string, email: string, role: string, timezone: string) {
