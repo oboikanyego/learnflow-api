@@ -17,6 +17,10 @@ const schema = z.object({
   GROQ_MODEL: z.string().default('openai/gpt-oss-20b'),
   GEMINI_API_KEY: z.string().optional(),
   GEMINI_MODEL: z.string().default('gemini-3.7-flash'),
+  AI_PLAN_DAILY_LIMIT: z.coerce.number().int().min(1).max(1000).default(5),
+  AI_PLAN_MONTHLY_LIMIT: z.coerce.number().int().min(1).max(10000).default(30),
+  AI_COACH_DAILY_LIMIT: z.coerce.number().int().min(1).max(5000).default(25),
+  AI_COACH_MONTHLY_LIMIT: z.coerce.number().int().min(1).max(50000).default(300),
   RESEND_API_KEY: z.string().optional(),
   EMAIL_FROM: z.string().default('LearnFlow <onboarding@resend.dev>'),
   REMINDER_CRON_SECRET: z.string().min(24).optional()
