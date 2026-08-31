@@ -21,6 +21,10 @@ const schema = z.object({
   AI_PLAN_MONTHLY_LIMIT: z.coerce.number().int().min(1).max(10000).default(30),
   AI_COACH_DAILY_LIMIT: z.coerce.number().int().min(1).max(5000).default(25),
   AI_COACH_MONTHLY_LIMIT: z.coerce.number().int().min(1).max(50000).default(300),
+  PRO_AI_PLAN_DAILY_LIMIT: z.coerce.number().int().min(1).max(1000).default(20),
+  PRO_AI_PLAN_MONTHLY_LIMIT: z.coerce.number().int().min(1).max(10000).default(150),
+  PRO_AI_COACH_DAILY_LIMIT: z.coerce.number().int().min(1).max(5000).default(100),
+  PRO_AI_COACH_MONTHLY_LIMIT: z.coerce.number().int().min(1).max(50000).default(1500),
   RESEND_API_KEY: z.string().optional(),
   EMAIL_FROM: z.string().default('LearnFlow <onboarding@resend.dev>'),
   REMINDER_CRON_SECRET: z.string().min(24).optional()
