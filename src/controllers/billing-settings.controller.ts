@@ -10,7 +10,11 @@ const billingSettingsSchema = z.object({
   proMonthlyPriceMinor: z.number().int().min(0),
   proYearlyPriceMinor: z.number().int().min(0),
   graceDays: z.number().int().min(0).max(30),
-  enabled: z.boolean()
+  enabled: z.boolean(),
+  providerPlanCodes: z.object({
+    monthly: z.string().trim().optional(),
+    yearly: z.string().trim().optional()
+  }).optional()
 });
 
 export async function getAdminBillingSettings(_req: AuthenticatedRequest, res: Response, next: NextFunction) { try { res.json(await getBillingSettings()); } catch (error) { next(error); } }
