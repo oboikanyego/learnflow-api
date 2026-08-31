@@ -1,0 +1,1 @@
+import { Router } from 'express';import { requireAuth } from '../middleware/auth.middleware.js';import { generatePlan } from '../controllers/ai.controller.js';export const aiRouter=Router();aiRouter.post('/generate-plan',requireAuth,generatePlan);
