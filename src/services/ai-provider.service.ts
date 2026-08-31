@@ -15,9 +15,15 @@ function configured(provider: AiProvider): boolean {
   return !!env.OPENAI_API_KEY;
 }
 
+function selectedModel(provider: AiProvider): string {
+  if (provider === 'groq') return env.GROQ_MODEL;
+  if (provider === 'gemini') return env.GEMINI_MODEL;
+  return env.OPENAI_MODEL;
+}
+
 export function getAiProviderInfo() {
   const provider = selectedProvider();
-  return { provider, configured: configured(provider) };
+  return { provider, model: selectedModel(provider), configured: configured(provider) };
 }
 
 export async function generateAiText(prompt: string): Promise<string> {
