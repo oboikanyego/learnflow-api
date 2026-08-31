@@ -1,5 +1,13 @@
 import { Schema, model } from 'mongoose';
 
+export interface NotificationPreferences {
+  inAppReminders: boolean;
+  emailReminders: boolean;
+  reminderMinutes: number;
+  missedSessionEmails: boolean;
+  celebrationEmails: boolean;
+}
+
 export interface UserDocument {
   name: string;
   email: string;
@@ -7,13 +15,7 @@ export interface UserDocument {
   timezone: string;
   role: 'learner' | 'admin';
   lastSeenAt?: Date;
-  notificationPreferences: {
-    inAppReminders: boolean;
-    emailReminders: boolean;
-    reminderMinutes: number;
-    missedSessionEmails: boolean;
-    celebrationEmails: boolean;
-  };
+  notificationPreferences: NotificationPreferences;
   passwordResetTokenHash?: string;
   passwordResetExpiresAt?: Date;
   createdAt: Date;
