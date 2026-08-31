@@ -51,6 +51,7 @@ export class WeeklyReviewWorkerService {
           continue;
         }
         const intelligence = await getLearningIntelligence(String(user._id));
+        const focusModule = intelligence.weakestModules[0];
         const email = brandedEmail({
           preheader: `Your LearnFlow week: ${intelligence.week.completed} completed, ${intelligence.week.missed} missed`,
           eyebrow: 'Weekly learning review',
@@ -58,7 +59,7 @@ export class WeeklyReviewWorkerService {
           greeting: user.name,
           body: [
             `You completed ${intelligence.week.completed} lesson${intelligence.week.completed === 1 ? '' : 's'} and studied ${Math.round(intelligence.week.studiedMinutes / 60 * 10) / 10} hours this week.`,
-            intelligence.weakestModules.length ? `Your clearest opportunity next week is ${intelligence.weakestModules[0].title}.` : 'Your learning plan is staying on track. Keep protecting the sessions you schedule.'
+            focusModule ? `Your clearest opportunity next week is ${focusModule.title}.` : 'Your learning plan is staying on track. Keep protecting the sessions you schedule.'
           ],
           detailRows: [
             { label: 'Completion rate', value: `${intelligence.week.completionRate}%` },
