@@ -14,7 +14,8 @@ const DEFAULT_PREFERENCES: NotificationPreferences = {
   emailReminders: true,
   reminderMinutes: 30,
   missedSessionEmails: true,
-  celebrationEmails: true
+  celebrationEmails: true,
+  weeklyReviewEmails: false
 };
 const DEFAULT_ENTITLEMENT: Entitlement = { plan: 'FREE', status: 'ACTIVE', source: 'SYSTEM' };
 
