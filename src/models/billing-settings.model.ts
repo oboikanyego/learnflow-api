@@ -9,6 +9,7 @@ export interface BillingSettingsDocument {
   proYearlyPriceMinor: number;
   graceDays: number;
   enabled: boolean;
+  providerPlanCodes?: { monthly?: string; yearly?: string };
   updatedBy?: Schema.Types.ObjectId;
   createdAt: Date;
   updatedAt: Date;
@@ -22,6 +23,10 @@ const billingSettingsSchema = new Schema<BillingSettingsDocument>({
   proYearlyPriceMinor: { type: Number, default: 99000, min: 0, required: true },
   graceDays: { type: Number, default: 3, min: 0, max: 30, required: true },
   enabled: { type: Boolean, default: false, required: true },
+  providerPlanCodes: {
+    monthly: { type: String, trim: true },
+    yearly: { type: String, trim: true }
+  },
   updatedBy: { type: Schema.Types.ObjectId, ref: 'User' }
 }, { timestamps: true });
 
