@@ -13,6 +13,13 @@ const registerSchema = z.object({
 const loginSchema = z.object({ email: z.email(), password: z.string().min(8).max(128) });
 const forgotPasswordSchema = z.object({ email: z.email() });
 const resetPasswordSchema = z.object({ token: z.string().min(32), password: z.string().min(8).max(128) });
+const notificationPreferencesSchema = z.object({
+  inAppReminders: z.boolean(),
+  emailReminders: z.boolean(),
+  reminderMinutes: z.number().int().min(5).max(1440),
+  missedSessionEmails: z.boolean(),
+  celebrationEmails: z.boolean()
+});
 
 export async function register(req: Request, res: Response, next: NextFunction) {
   try { res.status(201).json(await authService.register(registerSchema.parse(req.body))); } catch (error) { next(error); }
@@ -28,4 +35,7 @@ export async function resetPassword(req: Request, res: Response, next: NextFunct
 }
 export async function me(req: AuthenticatedRequest, res: Response, next: NextFunction) {
   try { res.json(await authService.me(req.user!.id)); } catch (error) { next(error); }
+}
+export async function updateNotificationPreferences(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  try { res.json(await authService.updateNotificationPreferences(req.user!.id, notificationPreferencesSchema.parse(req.body))); } catch (error) { next(error); }
 }
