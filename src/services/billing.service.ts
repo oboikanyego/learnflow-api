@@ -1,5 +1,5 @@
-import { env } from '../config/env.js';
 import { SubscriptionModel, type BillingProvider, type SubscriptionStatus } from '../models/subscription.model.js';
+import { getBillingSettings } from './billing-settings.service.js';
 import { applyEntitlementChange } from './entitlement.service.js';
 
 export interface BillingLifecycleEvent {
@@ -27,42 +27,51 @@ function entitlementForStatus(status: SubscriptionStatus) {
   return { plan: 'FREE' as const, status: 'ACTIVE' as const };
 }
 
-export function billingCatalog() {
+export async function billingCatalog() {
+  const settings = await getBillingSettings();
   return {
-    configured: env.BILLING_PROVIDER !== 'UNCONFIGURED',
-    provider: env.BILLING_PROVIDER,
-    currency: 'ZAR',
-    graceDays: env.BILLING_GRACE_DAYS,
+    configured: settings.provider !== 'UNCONFIGURED',
+    provider: settings.provider,
+    currency: settings.currency,
+    graceDays: settings.graceDays,
     plans: {
       FREE: { monthlyAmountMinor: 0, yearlyAmountMinor: 0 },
-      PRO: { monthlyAmountMinor: env.PRO_MONTHLY_PRICE_ZAR_CENTS, yearlyAmountMinor: env.PRO_YEARLY_PRICE_ZAR_CENTS }
+      PRO: { monthlyAmountMinor: settings.proMonthlyPriceMinor, yearlyAmountMinor: settings.proYearlyPriceMinor }
     }
   };
 }
 
 export async function getUserSubscription(userId: string) {
-  const subscription = await SubscriptionModel.findOne({ userId }).lean();
-  return { catalog: billingCatalog(), subscription };
+  const [subscription, catalog] = await Promise.all([
+    SubscriptionModel.findOne({ userId }).lean(),
+    billingCatalog()
+  ]);
+  return { catalog, subscription };
 }
 
 export async function createCheckout(userId: string, interval: 'MONTHLY' | 'YEARLY') {
-  if (env.BILLING_PROVIDER === 'UNCONFIGURED') {
+  const settings = await getBillingSettings();
+  if (settings.provider === 'UNCONFIGURED') {
     throw Object.assign(new Error('Billing checkout is not configured yet. LearnFlow billing is ready for a payment provider but no provider has been connected.'), { statusCode: 503 });
   }
-  throw Object.assign(new Error(`Checkout adapter for ${env.BILLING_PROVIDER} has not been implemented yet.`), { statusCode: 501, userId, interval });
+  throw Object.assign(new Error(`Checkout adapter for ${settings.provider} has not been implemented yet.`), { statusCode: 501, userId, interval });
 }
 
 export async function cancelSubscription(userId: string) {
-  const subscription = await SubscriptionModel.findOne({ userId });
+  const [subscription, settings] = await Promise.all([
+    SubscriptionModel.findOne({ userId }),
+    getBillingSettings()
+  ]);
   if (!subscription || !['ACTIVE', 'PAST_DUE', 'CANCEL_AT_PERIOD_END'].includes(subscription.status)) {
     throw Object.assign(new Error('No active subscription is available to cancel.'), { statusCode: 409 });
   }
-  if (env.BILLING_PROVIDER === 'UNCONFIGURED') throw Object.assign(new Error('Billing provider is not configured.'), { statusCode: 503 });
-  throw Object.assign(new Error(`Cancellation adapter for ${env.BILLING_PROVIDER} has not been implemented yet.`), { statusCode: 501 });
+  if (settings.provider === 'UNCONFIGURED') throw Object.assign(new Error('Billing provider is not configured.'), { statusCode: 503 });
+  throw Object.assign(new Error(`Cancellation adapter for ${settings.provider} has not been implemented yet.`), { statusCode: 501 });
 }
 
 export async function processBillingLifecycleEvent(event: BillingLifecycleEvent) {
-  const amountMinor = event.amountMinor ?? (event.billingInterval === 'YEARLY' ? env.PRO_YEARLY_PRICE_ZAR_CENTS : env.PRO_MONTHLY_PRICE_ZAR_CENTS);
+  const settings = await getBillingSettings();
+  const amountMinor = event.amountMinor ?? (event.billingInterval === 'YEARLY' ? settings.proYearlyPriceMinor : settings.proMonthlyPriceMinor);
   const subscription = await SubscriptionModel.findOneAndUpdate(
     { userId: event.userId },
     {
@@ -73,7 +82,7 @@ export async function processBillingLifecycleEvent(event: BillingLifecycleEvent)
         providerPlanId: event.providerPlanId,
         plan: 'PRO',
         status: event.status,
-        currency: event.currency ?? 'ZAR',
+        currency: event.currency ?? settings.currency,
         amountMinor,
         billingInterval: event.billingInterval ?? 'MONTHLY',
         currentPeriodStart: event.currentPeriodStart,
@@ -102,5 +111,5 @@ export async function processBillingLifecycleEvent(event: BillingLifecycleEvent)
     endsAt: entitlement.plan === 'PRO' ? event.currentPeriodEnd : undefined
   });
 
-  return { subscription, entitlement: entitlementResult };
+  return { subscription, entitlement: entitlementResult, graceDays: settings.graceDays };
 }
