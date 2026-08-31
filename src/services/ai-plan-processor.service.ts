@@ -8,6 +8,7 @@ import { PhaseModel } from '../models/phase.model.js';
 import { UserModel } from '../models/user.model.js';
 import { localDateTimeToUtc } from '../utils/timezone.js';
 import { generateAiText } from './ai-provider.service.js';
+import { completeAiUsage } from './ai-usage.service.js';
 import { sendPlanCreatedEmail } from './learning-email.service.js';
 
 export const planRequestSchema = z.object({
@@ -50,7 +51,6 @@ export async function persistGeneratedPlan(ownerId: string, timezone: string, ra
   const plan = generatedPlanSchema.parse(rawPlan);
   const path = await LearningPathModel.create({ ownerId, title: plan.learningPath.title, description: plan.learningPath.description, status: 'ACTIVE' });
   let lessonCount = 0;
-
   for (let p = 0; p < plan.phases.length; p++) {
     const phaseData = plan.phases[p]!;
     const phase = await PhaseModel.create({ ownerId, learningPathId: path._id, title: phaseData.title, position: p });
@@ -60,17 +60,11 @@ export async function persistGeneratedPlan(ownerId: string, timezone: string, ra
       for (let l = 0; l < moduleData.lessons.length; l++) {
         const lesson = moduleData.lessons[l]!;
         const scheduledAt = localDateTimeToUtc(lesson.date, lesson.time, timezone);
-        await LessonModel.create({
-          ownerId, learningPathId: path._id, phaseId: phase._id, moduleId: module._id,
-          title: lesson.title, description: lesson.description, resourceUrl: lesson.resourceUrl || undefined,
-          durationMinutes: lesson.durationMinutes, position: l, scheduledAt,
-          status: scheduledAt ? 'SCHEDULED' : 'BACKLOG'
-        });
+        await LessonModel.create({ ownerId, learningPathId: path._id, phaseId: phase._id, moduleId: module._id, title: lesson.title, description: lesson.description, resourceUrl: lesson.resourceUrl || undefined, durationMinutes: lesson.durationMinutes, position: l, scheduledAt, status: scheduledAt ? 'SCHEDULED' : 'BACKLOG' });
         lessonCount++;
       }
     }
   }
-
   void sendPlanCreatedEmail({ ownerId, learningPathId: path.id, title: path.title, source: 'ai', lessonCount });
   return path._id;
 }
@@ -84,47 +78,24 @@ export async function createGeneratedPlan(input: PlanInput, timezone: string) {
   return generatedPlanSchema.parse(JSON.parse(text.replace(/^```json\s*|```$/g, '').trim()));
 }
 
-export async function processAiPlanJob(jobId: string, ownerId: string, timezone: string, input: PlanInput): Promise<void> {
-  await AiPlanJobModel.findOneAndUpdate(
-    { _id: jobId, ownerId },
-    { status: 'PROCESSING', startedAt: new Date(), errorMessage: undefined, completedAt: undefined }
-  );
-
+export async function processAiPlanJob(jobId: string, ownerId: string, timezone: string, input: PlanInput, usageId?: string): Promise<void> {
+  await AiPlanJobModel.findOneAndUpdate({ _id: jobId, ownerId }, { status: 'PROCESSING', startedAt: new Date(), errorMessage: undefined, completedAt: undefined });
   try {
     const parsed = await createGeneratedPlan(input, timezone);
     const learningPathId = input.save ? await persistGeneratedPlan(ownerId, timezone, parsed) : undefined;
-    await AiPlanJobModel.findOneAndUpdate(
-      { _id: jobId, ownerId },
-      { status: 'COMPLETED', plan: parsed, learningPathId, completedAt: new Date(), errorMessage: undefined }
-    );
-    await NotificationModel.create({
-      ownerId,
-      type: 'AI_PLAN_READY',
-      title: 'Your learning plan is ready',
-      message: `The ${parsed.learningPath.title} roadmap has finished generating. You can preview it now.`,
-      actionUrl: `/ai-planner?job=${jobId}`
-    });
+    await AiPlanJobModel.findOneAndUpdate({ _id: jobId, ownerId }, { status: 'COMPLETED', plan: parsed, learningPathId, completedAt: new Date(), errorMessage: undefined });
+    if (usageId) await completeAiUsage(usageId, 'SUCCEEDED', { jobId });
+    await NotificationModel.create({ ownerId, type: 'AI_PLAN_READY', title: 'Your learning plan is ready', message: `The ${parsed.learningPath.title} roadmap has finished generating. You can preview it now.`, actionUrl: `/ai-planner?job=${jobId}` });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Learning plan generation failed';
-    await AiPlanJobModel.findOneAndUpdate(
-      { _id: jobId, ownerId },
-      { status: 'FAILED', errorMessage: message.slice(0, 500), completedAt: new Date() }
-    );
+    await AiPlanJobModel.findOneAndUpdate({ _id: jobId, ownerId }, { status: 'FAILED', errorMessage: message.slice(0, 500), completedAt: new Date() });
     throw error;
   }
 }
 
-export async function markAiPlanJobPermanentlyFailed(jobId: string, ownerId: string, error: unknown): Promise<void> {
+export async function markAiPlanJobPermanentlyFailed(jobId: string, ownerId: string, error: unknown, usageId?: string): Promise<void> {
   const message = error instanceof Error ? error.message : 'Learning plan generation failed';
-  await AiPlanJobModel.findOneAndUpdate(
-    { _id: jobId, ownerId },
-    { status: 'FAILED', errorMessage: message.slice(0, 500), completedAt: new Date() }
-  );
-  await NotificationModel.create({
-    ownerId,
-    type: 'AI_PLAN_FAILED',
-    title: 'Learning plan generation failed',
-    message: 'We could not finish generating your learning plan after retrying it. Open AI requests to retry it manually.',
-    actionUrl: '/ai-requests'
-  });
+  await AiPlanJobModel.findOneAndUpdate({ _id: jobId, ownerId }, { status: 'FAILED', errorMessage: message.slice(0, 500), completedAt: new Date() });
+  if (usageId) await completeAiUsage(usageId, 'FAILED', { jobId, errorMessage: message });
+  await NotificationModel.create({ ownerId, type: 'AI_PLAN_FAILED', title: 'Learning plan generation failed', message: 'We could not finish generating your learning plan after retrying it. Open AI requests to retry it manually.', actionUrl: '/ai-requests' });
 }
