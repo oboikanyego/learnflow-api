@@ -3,12 +3,19 @@ import jwt from 'jsonwebtoken';
 import { createHash, randomBytes } from 'node:crypto';
 import { env } from '../config/env.js';
 import { userRepository } from '../repositories/user.repository.js';
-import { UserModel } from '../models/user.model.js';
-import { brandedEmail } from './email-template.service.js';
+import { UserModel, type NotificationPreferences } from '../models/user.model.js';
 import { emailService } from './email.service.js';
+import { passwordResetEmail } from '../templates/email-templates.js';
 
 const RESET_TTL_MS = 30 * 60 * 1000;
 const GENERIC_RESET_MESSAGE = 'If an account exists for that email, a password reset link has been sent.';
+const DEFAULT_PREFERENCES: NotificationPreferences = {
+  inAppReminders: true,
+  emailReminders: true,
+  reminderMinutes: 30,
+  missedSessionEmails: true,
+  celebrationEmails: true
+};
 
 export class AuthService {
   async register(input: { name: string; email: string; password: string; timezone: string }) {
@@ -25,9 +32,22 @@ export class AuthService {
   }
 
   async me(userId: string) {
-    const user = await userRepository.findById(userId);
+    const user = await UserModel.findById(userId).lean();
     if (!user) throw Object.assign(new Error('User not found'), { statusCode: 404 });
-    return { id: user.id, name: user.name, email: user.email, role: user.role, timezone: user.timezone };
+    return {
+      id: String(user._id),
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      timezone: user.timezone,
+      notificationPreferences: { ...DEFAULT_PREFERENCES, ...(user.notificationPreferences ?? {}) }
+    };
+  }
+
+  async updateNotificationPreferences(userId: string, input: NotificationPreferences) {
+    const user = await UserModel.findByIdAndUpdate(userId, { $set: { notificationPreferences: input } }, { new: true }).lean();
+    if (!user) throw Object.assign(new Error('User not found'), { statusCode: 404 });
+    return { notificationPreferences: { ...DEFAULT_PREFERENCES, ...(user.notificationPreferences ?? {}) } };
   }
 
   async forgotPassword(email: string) {
@@ -40,7 +60,7 @@ export class AuthService {
     await UserModel.updateOne({ _id: user._id }, { $set: { passwordResetTokenHash: tokenHash, passwordResetExpiresAt: expiresAt } });
 
     const resetUrl = `${env.CLIENT_ORIGIN.replace(/\/$/, '')}/reset-password?token=${encodeURIComponent(rawToken)}`;
-    if (env.RESEND_API_KEY) await this.sendResetEmail(user.email, user.name, resetUrl);
+    if (env.RESEND_API_KEY) await emailService.sendTemplate(user.email, passwordResetEmail(user.name, resetUrl));
 
     return {
       message: GENERIC_RESET_MESSAGE,
@@ -62,23 +82,6 @@ export class AuthService {
     user.passwordResetExpiresAt = undefined;
     await user.save();
     return { message: 'Password updated successfully. You can now sign in with your new password.' };
-  }
-
-  private async sendResetEmail(email: string, name: string, resetUrl: string) {
-    const content = brandedEmail({
-      preheader: 'Reset your LearnFlow password securely',
-      eyebrow: 'Account security',
-      title: 'Reset your LearnFlow password',
-      greeting: name,
-      body: [
-        'We received a request to reset the password for your LearnFlow account.',
-        'Use the secure button below to choose a new password. The link expires after 30 minutes.'
-      ],
-      ctaLabel: 'Reset password',
-      ctaUrl: resetUrl,
-      note: 'If you did not request this password reset, you can safely ignore this email. Your existing password will remain unchanged.'
-    });
-    await emailService.send({ to: email, subject: 'Reset your LearnFlow password', ...content });
   }
 
   private toAuthResponse(id: string, name: string, email: string, role: string, timezone: string) {
