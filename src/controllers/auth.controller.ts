@@ -13,6 +13,14 @@ const registerSchema = z.object({
 const loginSchema = z.object({ email: z.email(), password: z.string().min(8).max(128) });
 const forgotPasswordSchema = z.object({ email: z.email() });
 const resetPasswordSchema = z.object({ token: z.string().min(32), password: z.string().min(8).max(128) });
+const profileSchema = z.object({
+  name: z.string().trim().min(2).max(80),
+  timezone: z.string().refine(isValidTimeZone, 'Invalid IANA timezone')
+});
+const changePasswordSchema = z.object({
+  currentPassword: z.string().min(8).max(128),
+  newPassword: z.string().min(8).max(128)
+});
 const notificationPreferencesSchema = z.object({
   inAppReminders: z.boolean(),
   emailReminders: z.boolean(),
@@ -35,6 +43,12 @@ export async function resetPassword(req: Request, res: Response, next: NextFunct
 }
 export async function me(req: AuthenticatedRequest, res: Response, next: NextFunction) {
   try { res.json(await authService.me(req.user!.id)); } catch (error) { next(error); }
+}
+export async function updateProfile(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  try { res.json(await authService.updateProfile(req.user!.id, profileSchema.parse(req.body))); } catch (error) { next(error); }
+}
+export async function changePassword(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  try { const input = changePasswordSchema.parse(req.body); res.json(await authService.changePassword(req.user!.id, input.currentPassword, input.newPassword)); } catch (error) { next(error); }
 }
 export async function updateNotificationPreferences(req: AuthenticatedRequest, res: Response, next: NextFunction) {
   try { res.json(await authService.updateNotificationPreferences(req.user!.id, notificationPreferencesSchema.parse(req.body))); } catch (error) { next(error); }
