@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { requireAuth } from '../middleware/auth.middleware.js';
 import {
   getHierarchy,
+  getLesson,
   createPhase,
   createModule,
   createLesson,
@@ -15,6 +16,7 @@ import { addLessonComment, listLessonComments } from '../controllers/lesson-comm
 export const hierarchyRouter = Router();
 
 hierarchyRouter.get('/learning-paths/:learningPathId/hierarchy', requireAuth, getHierarchy);
+hierarchyRouter.get('/lessons/:lessonId', requireAuth, getLesson);
 hierarchyRouter.post('/learning-paths/:learningPathId/phases', requireAuth, createPhase);
 hierarchyRouter.post('/phases/:phaseId/modules', requireAuth, createModule);
 hierarchyRouter.post('/modules/:moduleId/lessons', requireAuth, createLesson);
