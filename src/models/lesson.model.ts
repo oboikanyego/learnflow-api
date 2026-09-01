@@ -26,6 +26,9 @@ export interface LessonDocument {
   nextReviewAt?: Date;
   lastReviewedAt?: Date;
   reviewCount: number;
+  masteryScore?: number;
+  assessmentAttempts: number;
+  lastAssessedAt?: Date;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -52,9 +55,13 @@ const schema = new Schema<LessonDocument>({
   reviewStage: { type: Number, min: 0, max: 10, default: 0 },
   nextReviewAt: { type: Date, index: true },
   lastReviewedAt: Date,
-  reviewCount: { type: Number, min: 0, default: 0 }
+  reviewCount: { type: Number, min: 0, default: 0 },
+  masteryScore: { type: Number, min: 0, max: 100 },
+  assessmentAttempts: { type: Number, min: 0, default: 0 },
+  lastAssessedAt: Date
 }, { timestamps: true });
 schema.index({ ownerId: 1, moduleId: 1, position: 1 });
 schema.index({ status: 1, scheduledAt: 1, reminderSentAt: 1 });
 schema.index({ ownerId: 1, nextReviewAt: 1 });
+schema.index({ ownerId: 1, masteryScore: 1 });
 export const LessonModel = model<LessonDocument>('Lesson', schema);
