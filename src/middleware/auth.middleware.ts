@@ -17,7 +17,16 @@ export function requireAuth(req: AuthenticatedRequest, res: Response, next: Next
   } catch { return res.status(401).json({ message: 'Invalid or expired token' }); }
 }
 
-export function requireAdmin(req: AuthenticatedRequest, res: Response, next: NextFunction) {
-  if (req.user?.role !== 'admin') return res.status(403).json({ message: 'Admin access required' });
-  next();
+export async function requireAdmin(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  try {
+    if (!req.user?.id) return res.status(401).json({ message: 'Authentication required' });
+    const user = await UserModel.findById(req.user.id).select('role').lean();
+    if (!user) return res.status(401).json({ message: 'Account no longer exists' });
+    const role = String(user.role ?? 'learner');
+    req.user.role = role;
+    if (role !== 'admin') return res.status(403).json({ message: 'Admin access required' });
+    next();
+  } catch (error) {
+    next(error);
+  }
 }
