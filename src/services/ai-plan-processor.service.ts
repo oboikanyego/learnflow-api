@@ -40,11 +40,17 @@ export const generatedPlanSchema = z.object({
 });
 
 export type PlanInput = z.infer<typeof planRequestSchema>;
+type GeneratedPlan = z.infer<typeof generatedPlanSchema>;
 
 export async function getUserTimezone(userId: string): Promise<string> {
   const user = await UserModel.findById(userId).select('timezone').lean();
   if (!user) throw Object.assign(new Error('User not found'), { statusCode: 404 });
   return user.timezone;
+}
+
+function countLessons(plan: GeneratedPlan): number {
+  return plan.phases.reduce((phaseTotal, phase) =>
+    phaseTotal + phase.modules.reduce((moduleTotal, module) => moduleTotal + module.lessons.length, 0), 0);
 }
 
 export async function persistGeneratedPlan(ownerId: string, timezone: string, rawPlan: unknown) {
@@ -65,8 +71,7 @@ export async function persistGeneratedPlan(ownerId: string, timezone: string, ra
       }
     }
   }
-  void sendPlanCreatedEmail({ ownerId, learningPathId: path.id, title: path.title, source: 'ai', lessonCount });
-  return path._id;
+  return { learningPathId: path._id, learningPathIdString: path.id, lessonCount };
 }
 
 function buildPlanPrompt(input: PlanInput, timezone: string): string {
@@ -82,10 +87,38 @@ export async function processAiPlanJob(jobId: string, ownerId: string, timezone:
   await AiPlanJobModel.findOneAndUpdate({ _id: jobId, ownerId }, { status: 'PROCESSING', startedAt: new Date(), errorMessage: undefined, completedAt: undefined });
   try {
     const parsed = await createGeneratedPlan(input, timezone);
-    const learningPathId = input.save ? await persistGeneratedPlan(ownerId, timezone, parsed) : undefined;
+    const persisted = input.save ? await persistGeneratedPlan(ownerId, timezone, parsed) : undefined;
+    const learningPathId = persisted?.learningPathId;
+
     await AiPlanJobModel.findOneAndUpdate({ _id: jobId, ownerId }, { status: 'COMPLETED', plan: parsed, learningPathId, completedAt: new Date(), errorMessage: undefined });
     if (usageId) await completeAiUsage(usageId, 'SUCCEEDED', { jobId });
-    await NotificationModel.create({ ownerId, type: 'AI_PLAN_READY', title: 'Your learning plan is ready', message: `The ${parsed.learningPath.title} roadmap has finished generating. You can preview it now.`, actionUrl: `/ai-planner?job=${jobId}` });
+
+    await NotificationModel.create({
+      ownerId,
+      type: 'AI_PLAN_READY',
+      title: 'Your learning plan is ready',
+      message: `The ${parsed.learningPath.title} roadmap has finished generating. You can preview it now.`,
+      actionUrl: `/ai-planner?job=${jobId}`
+    });
+
+    const emailResult = await sendPlanCreatedEmail({
+      ownerId,
+      learningPathId: persisted?.learningPathIdString,
+      jobId,
+      title: parsed.learningPath.title,
+      source: 'ai',
+      lessonCount: persisted?.lessonCount ?? countLessons(parsed)
+    });
+
+    if (emailResult.status === 'FAILED') {
+      await NotificationModel.create({
+        ownerId,
+        type: 'AI_PLAN_READY',
+        title: 'Your plan is ready, but email delivery failed',
+        message: 'The learning plan was generated successfully, but LearnFlow could not send the email notification. Your plan is still available in the app.',
+        actionUrl: `/ai-planner?job=${jobId}`
+      });
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Learning plan generation failed';
     await AiPlanJobModel.findOneAndUpdate({ _id: jobId, ownerId }, { status: 'FAILED', errorMessage: message.slice(0, 500), completedAt: new Date() });

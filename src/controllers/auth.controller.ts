@@ -54,3 +54,6 @@ export async function changePassword(req: AuthenticatedRequest, res: Response, n
 export async function updateNotificationPreferences(req: AuthenticatedRequest, res: Response, next: NextFunction) {
   try { res.json(await authService.updateNotificationPreferences(req.user!.id, notificationPreferencesSchema.parse(req.body))); } catch (error) { next(error); }
 }
+export async function testEmail(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  try { res.json(await authService.sendTestEmail(req.user!.id)); } catch (error) { next(error); }
+}
