@@ -1,0 +1,115 @@
+name: Security Ownership Smoke Test
+
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+jobs:
+  ownership:
+    runs-on: ubuntu-latest
+    services:
+      mongodb:
+        image: mongo:8.0
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.adminCommand({ ping: 1 })'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      NODE_ENV: test
+      PORT: 3000
+      MONGODB_URI: mongodb://127.0.0.1:27017/learnflow_security_smoke
+      CLIENT_ORIGIN: http://localhost:4200
+      JWT_SECRET: learnflow-security-smoke-secret-that-is-long-enough-12345
+      JWT_EXPIRES_IN: 1h
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build API
+        run: npm run build
+
+      - name: Start API
+        run: |
+          npm start > /tmp/learnflow-api.log 2>&1 &
+          echo $! > /tmp/learnflow-api.pid
+
+      - name: Wait for API health
+        run: |
+          for i in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:3000/health > /dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/learnflow-api.log
+          exit 1
+
+      - name: Verify authentication and ownership boundaries
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          status=$(curl --silent --output /tmp/noauth.json --write-out '%{http_code}' http://127.0.0.1:3000/api/v1/career/applications)
+          test "$status" = "401"
+
+          A=$(curl --fail --silent -X POST http://127.0.0.1:3000/api/v1/auth/register \
+            -H 'Content-Type: application/json' \
+            -d '{"name":"Security Owner","email":"security-owner-'"$GITHUB_RUN_ID"'@example.com","password":"StrongPass123!","timezone":"Africa/Johannesburg"}')
+          TOKEN_A=$(node -e "const d=JSON.parse(process.argv[1]); if(!d.token) process.exit(1); process.stdout.write(d.token)" "$A")
+
+          B=$(curl --fail --silent -X POST http://127.0.0.1:3000/api/v1/auth/register \
+            -H 'Content-Type: application/json' \
+            -d '{"name":"Security Stranger","email":"security-stranger-'"$GITHUB_RUN_ID"'@example.com","password":"StrongPass123!","timezone":"Africa/Johannesburg"}')
+          TOKEN_B=$(node -e "const d=JSON.parse(process.argv[1]); if(!d.token) process.exit(1); process.stdout.write(d.token)" "$B")
+
+          APP=$(curl --fail --silent -X POST http://127.0.0.1:3000/api/v1/career/applications \
+            -H "Authorization: Bearer $TOKEN_A" -H 'Content-Type: application/json' \
+            -d '{"title":"Private Role","company":"Private Company","stage":"APPLIED"}')
+          APP_ID=$(node -e "const d=JSON.parse(process.argv[1]); process.stdout.write(d.id || d._id)" "$APP")
+
+          OFFER=$(curl --fail --silent -X POST http://127.0.0.1:3000/api/v1/career/outcomes/offers \
+            -H "Authorization: Bearer $TOKEN_A" -H 'Content-Type: application/json' \
+            -d '{"applicationId":"'"$APP_ID"'","currency":"ZAR","monthlyBase":45000,"monthlyBenefitsValue":0,"annualBonus":0,"employmentType":"PERMANENT","roleFitRating":4,"growthRating":4,"stabilityRating":4,"flexibilityRating":3,"compensationRating":4}')
+          OFFER_ID=$(node -e "const d=JSON.parse(process.argv[1]); process.stdout.write(d.id || d._id)" "$OFFER")
+
+          status=$(curl --silent --output /tmp/foreign-app.json --write-out '%{http_code}' -X PATCH "http://127.0.0.1:3000/api/v1/career/applications/$APP_ID" \
+            -H "Authorization: Bearer $TOKEN_B" -H 'Content-Type: application/json' -d '{"stage":"REJECTED"}')
+          test "$status" = "404"
+
+          status=$(curl --silent --output /tmp/foreign-note.json --write-out '%{http_code}' -X POST "http://127.0.0.1:3000/api/v1/career/applications/$APP_ID/notes" \
+            -H "Authorization: Bearer $TOKEN_B" -H 'Content-Type: application/json' -d '{"body":"Should not be allowed"}')
+          test "$status" = "404"
+
+          status=$(curl --silent --output /tmp/foreign-offer.json --write-out '%{http_code}' -X PATCH "http://127.0.0.1:3000/api/v1/career/outcomes/offers/$OFFER_ID" \
+            -H "Authorization: Bearer $TOKEN_B" -H 'Content-Type: application/json' -d '{"status":"ACCEPTED"}')
+          test "$status" = "404"
+
+          status=$(curl --silent --output /tmp/admin.json --write-out '%{http_code}' http://127.0.0.1:3000/api/v1/admin/system-health \
+            -H "Authorization: Bearer $TOKEN_A")
+          test "$status" = "403"
+
+          OWNER_VIEW=$(curl --fail --silent http://127.0.0.1:3000/api/v1/career/applications -H "Authorization: Bearer $TOKEN_A")
+          node -e "const d=JSON.parse(process.argv[1]); if(d.applications?.length!==1 || d.applications[0].stage!=='OFFER') throw new Error('Owner data was mutated by foreign account')" "$OWNER_VIEW"
+
+          STRANGER_VIEW=$(curl --fail --silent http://127.0.0.1:3000/api/v1/career/applications -H "Authorization: Bearer $TOKEN_B")
+          node -e "const d=JSON.parse(process.argv[1]); if(d.applications?.length!==0) throw new Error('Cross-account application leak')" "$STRANGER_VIEW"
+
+          STRANGER_OUTCOMES=$(curl --fail --silent http://127.0.0.1:3000/api/v1/career/outcomes -H "Authorization: Bearer $TOKEN_B")
+          node -e "const d=JSON.parse(process.argv[1]); if(d.offers?.length!==0 || d.outcomes?.length!==0) throw new Error('Cross-account career data leak')" "$STRANGER_OUTCOMES"
+
+          echo 'Authentication and ownership boundaries passed.'
+
+      - name: Print API logs on failure
+        if: failure()
+        run: cat /tmp/learnflow-api.log || true
