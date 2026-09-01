@@ -1,0 +1,87 @@
+name: Deployed Comms Smoke Test
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/deployed-comms-smoke.yml'
+      - 'src/services/email.service.ts'
+      - 'src/services/learning-email.service.ts'
+      - 'src/services/auth.service.ts'
+      - 'src/services/ai-plan-processor.service.ts'
+      - 'src/controllers/auth.controller.ts'
+      - 'src/routes/auth.routes.ts'
+  workflow_dispatch:
+
+jobs:
+  verify-live-email:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      API_URL: https://learnflow-api-njgz.onrender.com
+    steps:
+      - name: Create temporary LearnFlow test account
+        shell: bash
+        run: |
+          set -euo pipefail
+          TEST_EMAIL="delivered+learnflow-${GITHUB_RUN_ID}@resend.dev"
+          TEST_PASSWORD="LearnFlowSmoke-${GITHUB_RUN_ID}!Aa"
+          printf 'TEST_EMAIL=%s\n' "$TEST_EMAIL" >> "$GITHUB_ENV"
+          printf 'TEST_PASSWORD=%s\n' "$TEST_PASSWORD" >> "$GITHUB_ENV"
+
+          register_response=$(curl --fail-with-body --silent --show-error \
+            -X POST "${API_URL}/api/v1/auth/register" \
+            -H 'Content-Type: application/json' \
+            --data "{\"name\":\"LearnFlow Comms Smoke\",\"email\":\"${TEST_EMAIL}\",\"password\":\"${TEST_PASSWORD}\",\"timezone\":\"Africa/Johannesburg\"}")
+
+          token=$(printf '%s' "$register_response" | jq -r '.token // empty')
+          test -n "$token"
+          printf 'AUTH_TOKEN=%s\n' "$token" >> "$GITHUB_ENV"
+
+      - name: Wait for deployed communication diagnostic endpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 40); do
+            status=$(curl --silent --show-error \
+              -o comms-response.json \
+              -w '%{http_code}' \
+              -X POST "${API_URL}/api/v1/auth/test-email" \
+              -H "Authorization: Bearer ${AUTH_TOKEN}")
+
+            if [ "$status" = "200" ]; then
+              cat comms-response.json
+              exit 0
+            fi
+
+            if [ "$status" = "404" ] || [ "$status" = "502" ] || [ "$status" = "503" ]; then
+              echo "Live API not ready yet (HTTP ${status}); retry ${attempt}/40"
+              sleep 15
+              continue
+            fi
+
+            echo "Communication self-test failed with HTTP ${status}"
+            cat comms-response.json
+            exit 1
+          done
+
+          echo 'Timed out waiting for the deployed communication endpoint.'
+          exit 1
+
+      - name: Assert Resend accepted and delivered test message
+        shell: bash
+        run: |
+          set -euo pipefail
+          status=$(jq -r '.status // empty' comms-response.json)
+          provider=$(jq -r '.provider // empty' comms-response.json)
+          message_id=$(jq -r '.providerMessageId // empty' comms-response.json)
+
+          if [ "$status" != "SENT" ]; then
+            echo 'LearnFlow email transport did not return SENT.'
+            cat comms-response.json
+            exit 1
+          fi
+
+          test "$provider" = 'resend'
+          test -n "$message_id"
+          echo "Resend accepted the deployed LearnFlow test email with id ${message_id}."
