@@ -1,0 +1,153 @@
+import { SubscriptionModel, type BillingProvider, type SubscriptionStatus } from '../models/subscription.model.js';
+import { UserModel } from '../models/user.model.js';
+import { getBillingSettings } from './billing-settings.service.js';
+import { applyEntitlementChange } from './entitlement.service.js';
+import { disablePaystackSubscription, initializePaystackSubscriptionCheckout } from './paystack.service.js';
+
+const DAY = 24 * 60 * 60 * 1000;
+
+export interface BillingLifecycleEvent {
+  provider: Exclude<BillingProvider, 'UNCONFIGURED'>;
+  eventId: string;
+  userId: string;
+  providerCustomerId?: string;
+  providerSubscriptionId?: string;
+  providerPlanId?: string;
+  providerCancellationToken?: string;
+  status: SubscriptionStatus;
+  amountMinor?: number;
+  currency?: string;
+  billingInterval?: 'MONTHLY' | 'YEARLY';
+  currentPeriodStart?: Date;
+  currentPeriodEnd?: Date;
+  lastPaymentAt?: Date;
+  nextBillingAt?: Date;
+  cancelAtPeriodEnd?: boolean;
+  metadata?: Record<string, unknown>;
+}
+
+function entitlementForStatus(status: SubscriptionStatus) {
+  if (status === 'ACTIVE' || status === 'CANCEL_AT_PERIOD_END') return { plan: 'PRO' as const, status: 'ACTIVE' as const };
+  if (status === 'PAST_DUE') return { plan: 'PRO' as const, status: 'GRACE' as const };
+  return { plan: 'FREE' as const, status: 'ACTIVE' as const };
+}
+
+export async function billingCatalog() {
+  const settings = await getBillingSettings();
+  return {
+    configured: settings.provider !== 'UNCONFIGURED',
+    enabled: settings.enabled,
+    provider: settings.provider,
+    currency: settings.currency,
+    graceDays: settings.graceDays,
+    plans: {
+      FREE: { monthlyAmountMinor: 0, yearlyAmountMinor: 0 },
+      PRO: { monthlyAmountMinor: settings.proMonthlyPriceMinor, yearlyAmountMinor: settings.proYearlyPriceMinor }
+    }
+  };
+}
+
+export async function getUserSubscription(userId: string) {
+  const [subscription, catalog, user] = await Promise.all([
+    SubscriptionModel.findOne({ userId }).lean(),
+    billingCatalog(),
+    UserModel.findById(userId).select('entitlement').lean()
+  ]);
+  if (!user) throw Object.assign(new Error('User not found.'), { statusCode: 404 });
+
+  const entitlement = user.entitlement ?? { plan: 'FREE' as const, status: 'ACTIVE' as const, source: 'SYSTEM' as const };
+  const effectivePlan = entitlement.plan === 'PRO' && ['ACTIVE', 'GRACE'].includes(entitlement.status) ? 'PRO' as const : 'FREE' as const;
+
+  return {
+    catalog,
+    subscription,
+    effectivePlan,
+    entitlementStatus: entitlement.status,
+    entitlementSource: entitlement.source,
+    entitlementEndsAt: entitlement.endsAt
+  };
+}
+
+export async function createCheckout(userId: string, interval: 'MONTHLY' | 'YEARLY') {
+  const settings = await getBillingSettings();
+  if (!settings.enabled) throw Object.assign(new Error('Billing checkout is currently disabled.'), { statusCode: 503 });
+  if (settings.provider !== 'PAYSTACK') throw Object.assign(new Error(`Checkout adapter for ${settings.provider} has not been implemented yet.`), { statusCode: 501 });
+
+  const user = await UserModel.findById(userId).select('email').lean();
+  if (!user) throw Object.assign(new Error('User not found.'), { statusCode: 404 });
+  const planCode = interval === 'YEARLY' ? settings.providerPlanCodes?.yearly : settings.providerPlanCodes?.monthly;
+  if (!planCode) throw Object.assign(new Error(`Paystack ${interval.toLowerCase()} plan code is not configured.`), { statusCode: 409 });
+  const amountMinor = interval === 'YEARLY' ? settings.proYearlyPriceMinor : settings.proMonthlyPriceMinor;
+
+  const checkout = await initializePaystackSubscriptionCheckout({ email: user.email, userId, interval, amountMinor, currency: settings.currency, planCode });
+  await SubscriptionModel.findOneAndUpdate(
+    { userId },
+    {
+      $set: { provider: 'PAYSTACK', providerPlanId: planCode, plan: 'PRO', status: 'PENDING', currency: settings.currency, amountMinor, billingInterval: interval, cancelAtPeriodEnd: false, metadata: { checkoutReference: checkout.reference } },
+      $unset: { graceEndsAt: '', graceExpiredAt: '' },
+      $setOnInsert: { userId }
+    },
+    { upsert: true, new: true }
+  );
+
+  return { provider: 'PAYSTACK', checkoutUrl: checkout.authorization_url, reference: checkout.reference, interval };
+}
+
+export async function cancelSubscription(userId: string) {
+  const subscription = await SubscriptionModel.findOne({ userId }).select('+providerCancellationToken');
+  if (!subscription || !['ACTIVE', 'PAST_DUE', 'CANCEL_AT_PERIOD_END'].includes(subscription.status)) throw Object.assign(new Error('No active subscription is available to cancel.'), { statusCode: 409 });
+  if (subscription.provider !== 'PAYSTACK') throw Object.assign(new Error(`Cancellation adapter for ${subscription.provider} has not been implemented yet.`), { statusCode: 501 });
+  if (!subscription.providerSubscriptionId || !subscription.providerCancellationToken) throw Object.assign(new Error('Paystack cancellation details are not available for this subscription.'), { statusCode: 409 });
+
+  await disablePaystackSubscription(subscription.providerSubscriptionId, subscription.providerCancellationToken);
+  subscription.status = 'CANCEL_AT_PERIOD_END';
+  subscription.cancelAtPeriodEnd = true;
+  await subscription.save();
+  return { subscriptionId: subscription.id, status: subscription.status, cancelAtPeriodEnd: true };
+}
+
+export async function processBillingLifecycleEvent(event: BillingLifecycleEvent) {
+  const settings = await getBillingSettings();
+  const amountMinor = event.amountMinor ?? (event.billingInterval === 'YEARLY' ? settings.proYearlyPriceMinor : settings.proMonthlyPriceMinor);
+  const graceEndsAt = event.status === 'PAST_DUE' ? new Date(Date.now() + settings.graceDays * DAY) : undefined;
+
+  const setValues: Record<string, unknown> = {
+    provider: event.provider,
+    providerCustomerId: event.providerCustomerId,
+    providerSubscriptionId: event.providerSubscriptionId,
+    providerPlanId: event.providerPlanId,
+    providerCancellationToken: event.providerCancellationToken,
+    plan: 'PRO',
+    status: event.status,
+    currency: event.currency ?? settings.currency,
+    amountMinor,
+    billingInterval: event.billingInterval ?? 'MONTHLY',
+    currentPeriodStart: event.currentPeriodStart,
+    currentPeriodEnd: event.currentPeriodEnd,
+    cancelAtPeriodEnd: event.cancelAtPeriodEnd ?? event.status === 'CANCEL_AT_PERIOD_END',
+    cancelledAt: ['CANCELLED', 'EXPIRED'].includes(event.status) ? new Date() : undefined,
+    lastPaymentAt: event.lastPaymentAt,
+    nextBillingAt: event.nextBillingAt,
+    metadata: event.metadata
+  };
+  if (graceEndsAt) setValues.graceEndsAt = graceEndsAt;
+
+  const update: Record<string, unknown> = { $set: setValues, $setOnInsert: { userId: event.userId } };
+  if (event.status !== 'PAST_DUE') update.$unset = { graceEndsAt: '', graceExpiredAt: '' };
+
+  const subscription = await SubscriptionModel.findOneAndUpdate({ userId: event.userId }, update, { upsert: true, new: true });
+
+  const entitlement = entitlementForStatus(event.status);
+  const entitlementResult = await applyEntitlementChange({
+    userId: event.userId,
+    plan: entitlement.plan,
+    status: entitlement.status,
+    source: 'BILLING',
+    provider: event.provider,
+    providerEventId: event.eventId,
+    reason: event.status === 'PAST_DUE' ? `Payment failed; ${settings.graceDays}-day grace period started.` : `Billing lifecycle event: ${event.status}`,
+    startsAt: event.currentPeriodStart ?? new Date(),
+    endsAt: entitlement.status === 'GRACE' ? graceEndsAt : (entitlement.plan === 'PRO' ? event.currentPeriodEnd : undefined)
+  });
+  return { subscription, entitlement: entitlementResult, graceDays: settings.graceDays, graceEndsAt };
+}

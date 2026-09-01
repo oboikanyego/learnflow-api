@@ -1,16 +1,119 @@
 import type { Response, NextFunction } from 'express';
 import { z } from 'zod';
 import type { AuthenticatedRequest } from '../middleware/auth.middleware.js';
-import { env } from '../config/env.js';
-import { LearningPathModel } from '../models/learning-path.model.js';
-import { PhaseModel } from '../models/phase.model.js';
-import { ModuleModel } from '../models/module.model.js';
-import { LessonModel } from '../models/lesson.model.js';
-import { UserModel } from '../models/user.model.js';
-import { localDateTimeToUtc } from '../utils/timezone.js';
+import { AiPlanJobModel } from '../models/ai-plan-job.model.js';
+import { getAiProviderInfo, generateAiText } from '../services/ai-provider.service.js';
+import { createGeneratedPlan, getUserTimezone, persistGeneratedPlan, planRequestSchema } from '../services/ai-plan-processor.service.js';
+import { enqueueAiPlanJob } from '../services/ai-plan-queue.service.js';
+import { completeAiUsage, getUserAiUsage, reserveAiUsage } from '../services/ai-usage.service.js';
 
-const requestSchema=z.object({topic:z.string().min(2).max(120),weeks:z.number().int().min(1).max(52),days:z.array(z.string()).min(1).max(7),time:z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),durationMinutes:z.number().int().min(15).max(240).default(60),startDate:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),save:z.boolean().default(false)});
-const planSchema=z.object({learningPath:z.object({title:z.string().min(2),description:z.string().optional()}),phases:z.array(z.object({title:z.string().min(1),modules:z.array(z.object({title:z.string().min(1),lessons:z.array(z.object({title:z.string().min(1),description:z.string().optional(),date:z.string(),time:z.string(),durationMinutes:z.number().int().min(5).max(480),resourceUrl:z.string().optional()}))}))}))});
-function extractText(data:unknown):string{const value=data as {output_text?:string;output?:Array<{content?:Array<{text?:string}>}>};if(typeof value.output_text==='string')return value.output_text;for(const item of value.output??[])for(const c of item.content??[])if(typeof c.text==='string')return c.text;return '';}
-async function persistPlan(ownerId:string,timezone:string,rawPlan:unknown){const plan=planSchema.parse(rawPlan);const path=await LearningPathModel.create({ownerId,title:plan.learningPath.title,description:plan.learningPath.description,status:'ACTIVE'});for(let p=0;p<plan.phases.length;p++){const phaseData=plan.phases[p]!;const phase=await PhaseModel.create({ownerId,learningPathId:path._id,title:phaseData.title,position:p});for(let m=0;m<phaseData.modules.length;m++){const moduleData=phaseData.modules[m]!;const module=await ModuleModel.create({ownerId,learningPathId:path._id,phaseId:phase._id,title:moduleData.title,position:m});for(let l=0;l<moduleData.lessons.length;l++){const lesson=moduleData.lessons[l]!;const scheduledAt=localDateTimeToUtc(lesson.date,lesson.time,timezone);await LessonModel.create({ownerId,learningPathId:path._id,phaseId:phase._id,moduleId:module._id,title:lesson.title,description:lesson.description,resourceUrl:lesson.resourceUrl||undefined,durationMinutes:lesson.durationMinutes,position:l,scheduledAt,status:scheduledAt?'SCHEDULED':'BACKLOG'});}}}return path._id;}
-export async function generatePlan(req:AuthenticatedRequest,res:Response,next:NextFunction){try{const input=requestSchema.parse(req.body);if(!env.OPENAI_API_KEY)return res.status(503).json({message:'AI plan generation is not configured. Set OPENAI_API_KEY on Render.'});const user=await UserModel.findById(req.user!.id).select('timezone').lean();if(!user)return res.status(404).json({message:'User not found'});const prompt=`Create a practical learning plan for ${input.topic}. Duration: ${input.weeks} weeks. Study days: ${input.days.join(', ')}. Start date: ${input.startDate}. Study time: ${input.time} in timezone ${user.timezone}. Session duration: ${input.durationMinutes} minutes. Return ONLY valid JSON with shape {"learningPath":{"title":"...","description":"..."},"phases":[{"title":"...","modules":[{"title":"...","lessons":[{"title":"...","description":"...","date":"YYYY-MM-DD","time":"HH:mm","durationMinutes":60,"resourceUrl":""}]}]}]}. Keep lessons realistic and ordered. Do not include markdown fences.`;const response=await fetch('https://api.openai.com/v1/responses',{method:'POST',headers:{Authorization:`Bearer ${env.OPENAI_API_KEY}`,'Content-Type':'application/json'},body:JSON.stringify({model:env.OPENAI_MODEL,input:prompt})});if(!response.ok){const detail=await response.text();throw new Error(`OpenAI request failed (${response.status}): ${detail.slice(0,300)}`);}const parsed=planSchema.parse(JSON.parse(extractText(await response.json())));const learningPathId=input.save?await persistPlan(req.user!.id,user.timezone,parsed):undefined;res.json({plan:parsed,learningPathId,timezone:user.timezone});}catch(error){next(error);}}
+const coachSchema = z.object({ message: z.string().min(2).max(4000), context: z.string().max(4000).optional() });
+
+export async function generatePlan(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  let usageId: string | undefined;
+  try {
+    const input = planRequestSchema.parse(req.body);
+    const provider = getAiProviderInfo();
+    if (!provider.configured) return res.status(503).json({ message: `AI plan generation is not configured for ${provider.provider}. Configure an AI provider key on Render.` });
+    const usage = await reserveAiUsage(req.user!.id, req.user!.role, 'PLAN', { mode: 'synchronous', save: input.save });
+    usageId = usage.id;
+    const timezone = await getUserTimezone(req.user!.id);
+    const parsed = await createGeneratedPlan(input, timezone);
+    const learningPathId = input.save ? await persistGeneratedPlan(req.user!.id, timezone, parsed) : undefined;
+    await completeAiUsage(usage.id, 'SUCCEEDED');
+    res.json({ plan: parsed, learningPathId, timezone, provider: provider.provider, model: provider.model, usage: await getUserAiUsage(req.user!.id) });
+  } catch (error) {
+    if (usageId) await completeAiUsage(usageId, 'FAILED', { errorMessage: error instanceof Error ? error.message : 'AI generation failed' }).catch(() => undefined);
+    next(error);
+  }
+}
+
+export async function queuePlan(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  let usageId: string | undefined;
+  try {
+    const input = planRequestSchema.parse(req.body);
+    const provider = getAiProviderInfo();
+    if (!provider.configured) return res.status(503).json({ message: `AI plan generation is not configured for ${provider.provider}. Configure an AI provider key on Render.` });
+    const usage = await reserveAiUsage(req.user!.id, req.user!.role, 'PLAN', { mode: 'background', save: input.save });
+    usageId = usage.id;
+    const timezone = await getUserTimezone(req.user!.id);
+    const job = await AiPlanJobModel.create({ ownerId: req.user!.id, status: 'QUEUED', input });
+    try {
+      await enqueueAiPlanJob({ appJobId: job.id, ownerId: req.user!.id, timezone, input, usageId: usage.id });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Background queue unavailable';
+      await AiPlanJobModel.findByIdAndUpdate(job._id, { status: 'FAILED', errorMessage: message.slice(0, 500), completedAt: new Date() });
+      await completeAiUsage(usage.id, 'FAILED', { jobId: job.id, errorMessage: message });
+      throw error;
+    }
+    res.status(202).json({ jobId: job.id, status: job.status, usage: await getUserAiUsage(req.user!.id), message: 'Your learning plan is safely queued in the background. You can continue using LearnFlow and we will notify you when it is ready.' });
+  } catch (error) {
+    if (usageId && !(error instanceof Error && error.message.includes('Background queue unavailable'))) {
+      // Queue failures are completed above; other post-reservation failures are accounted for here.
+    }
+    next(error);
+  }
+}
+
+export async function retryPlanJob(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  let usageId: string | undefined;
+  try {
+    const provider = getAiProviderInfo();
+    if (!provider.configured) return res.status(503).json({ message: `AI plan generation is not configured for ${provider.provider}. Configure an AI provider key on Render.` });
+    const source = await AiPlanJobModel.findOne({ _id: req.params.id, ownerId: req.user!.id }).lean();
+    if (!source) return res.status(404).json({ message: 'Learning plan job not found' });
+    if (source.status !== 'FAILED') return res.status(409).json({ message: 'Only failed learning plan requests can be retried.' });
+    const input = planRequestSchema.parse(source.input);
+    const usage = await reserveAiUsage(req.user!.id, req.user!.role, 'PLAN', { mode: 'manual-retry', retryOf: String(source._id), save: input.save });
+    usageId = usage.id;
+    const timezone = await getUserTimezone(req.user!.id);
+    const retry = await AiPlanJobModel.create({ ownerId: req.user!.id, status: 'QUEUED', input });
+    try {
+      await enqueueAiPlanJob({ appJobId: retry.id, ownerId: req.user!.id, timezone, input, usageId: usage.id });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Background queue unavailable';
+      await AiPlanJobModel.findByIdAndUpdate(retry._id, { status: 'FAILED', errorMessage: message.slice(0, 500), completedAt: new Date() });
+      await completeAiUsage(usage.id, 'FAILED', { jobId: retry.id, errorMessage: message });
+      throw error;
+    }
+    res.status(202).json({ jobId: retry.id, status: retry.status, retryOf: source._id, usage: await getUserAiUsage(req.user!.id), message: 'Retry safely queued. You can continue using LearnFlow and we will notify you when it finishes.' });
+  } catch (error) { next(error); }
+}
+
+export async function listPlanJobs(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  try { res.json(await AiPlanJobModel.find({ ownerId: req.user!.id }).sort({ createdAt: -1 }).limit(100).lean()); }
+  catch (error) { next(error); }
+}
+
+export async function getPlanJob(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  try {
+    const job = await AiPlanJobModel.findOne({ _id: req.params.id, ownerId: req.user!.id }).lean();
+    if (!job) return res.status(404).json({ message: 'Learning plan job not found' });
+    res.json(job);
+  } catch (error) { next(error); }
+}
+
+export async function coach(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  let usageId: string | undefined;
+  try {
+    const input = coachSchema.parse(req.body);
+    const provider = getAiProviderInfo();
+    if (!provider.configured) return res.status(503).json({ message: `AI coach is not configured for ${provider.provider}. Configure an AI provider key on Render.` });
+    const usage = await reserveAiUsage(req.user!.id, req.user!.role, 'COACH', { hasContext: Boolean(input.context) });
+    usageId = usage.id;
+    const prompt = `You are the LearnFlow learning coach. Help the learner understand concepts, unblock study sessions, break work into realistic next steps, and improve consistency. Do not claim to have changed their LearnFlow data and do not invent completion status. Keep the response concise and practical.\n\nOptional learner context:\n${input.context ?? 'No extra context supplied.'}\n\nLearner message:\n${input.message}`;
+    const answer = await generateAiText(prompt);
+    await completeAiUsage(usage.id, 'SUCCEEDED');
+    res.json({ answer, provider: provider.provider, model: provider.model, usage: await getUserAiUsage(req.user!.id) });
+  } catch (error) {
+    if (usageId) await completeAiUsage(usageId, 'FAILED', { errorMessage: error instanceof Error ? error.message : 'AI coach request failed' }).catch(() => undefined);
+    next(error);
+  }
+}
+
+export async function usageStatus(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  try { res.json(await getUserAiUsage(req.user!.id)); }
+  catch (error) { next(error); }
+}
+
+export async function providerStatus(_req: AuthenticatedRequest, res: Response) { res.json(getAiProviderInfo()); }
