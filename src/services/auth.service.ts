@@ -71,6 +71,39 @@ export class AuthService {
     return { notificationPreferences: { ...DEFAULT_PREFERENCES, ...(user.notificationPreferences ?? {}) } };
   }
 
+  async sendTestEmail(userId: string) {
+    const user = await UserModel.findById(userId).select('name email').lean();
+    if (!user?.email) throw Object.assign(new Error('User email address is unavailable'), { statusCode: 404 });
+
+    const content = brandedEmail({
+      preheader: 'LearnFlow email delivery test',
+      eyebrow: 'Communication diagnostics',
+      title: 'Your LearnFlow email is working',
+      greeting: user.name,
+      tone: 'success',
+      body: [
+        'This message was sent by the live LearnFlow API to verify that transactional email delivery is configured correctly.',
+        'If you received this email, the API can reach Resend and the configured sender is being accepted.'
+      ],
+      ctaLabel: 'Open LearnFlow',
+      ctaUrl: env.CLIENT_ORIGIN.replace(/\/$/, ''),
+      note: 'You can safely delete this diagnostic email.'
+    });
+
+    const result = await emailService.send({
+      to: user.email,
+      subject: 'LearnFlow communication test',
+      ...content
+    });
+
+    return {
+      recipient: user.email,
+      configured: Boolean(env.RESEND_API_KEY),
+      sender: env.EMAIL_FROM,
+      ...result
+    };
+  }
+
   async forgotPassword(email: string) {
     const user = await userRepository.findByEmail(email);
     if (!user) return { message: GENERIC_RESET_MESSAGE };
@@ -95,7 +128,10 @@ export class AuthService {
         ctaUrl: resetUrl,
         note: 'If you did not request a password reset, you can safely ignore this email.'
       });
-      await emailService.send({ to: user.email, subject: 'Reset your LearnFlow password', ...emailTemplate });
+      const delivery = await emailService.send({ to: user.email, subject: 'Reset your LearnFlow password', ...emailTemplate });
+      if (delivery.status !== 'SENT') {
+        console.error('LearnFlow password reset email was not sent', { userId: user.id, status: delivery.status, errorMessage: delivery.errorMessage });
+      }
     }
 
     return {
