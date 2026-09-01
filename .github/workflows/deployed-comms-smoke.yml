@@ -68,13 +68,19 @@ jobs:
           echo 'Timed out waiting for the deployed communication endpoint.'
           exit 1
 
-      - name: Assert Resend accepted and delivered test message
+      - name: Assert production sender and Resend delivery
         shell: bash
         run: |
           set -euo pipefail
           status=$(jq -r '.status // empty' comms-response.json)
           provider=$(jq -r '.provider // empty' comms-response.json)
           message_id=$(jq -r '.providerMessageId // empty' comms-response.json)
+          sender=$(jq -r '.sender // empty' comms-response.json)
+
+          if printf '%s' "$sender" | grep -Eqi '@resend\.dev\b'; then
+            echo "Production EMAIL_FROM is still using Resend's test domain: ${sender}"
+            exit 1
+          fi
 
           if [ "$status" != "SENT" ]; then
             echo 'LearnFlow email transport did not return SENT.'
@@ -84,4 +90,4 @@ jobs:
 
           test "$provider" = 'resend'
           test -n "$message_id"
-          echo "Resend accepted the deployed LearnFlow test email with id ${message_id}."
+          echo "Production sender ${sender} was accepted by Resend with id ${message_id}."

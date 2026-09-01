@@ -14,10 +14,24 @@ export interface EmailSendResult {
   errorMessage?: string;
 }
 
+function usesResendTestSender(): boolean {
+  return /@resend\.dev\b/i.test(env.EMAIL_FROM);
+}
+
+function isResendTestRecipient(email: string): boolean {
+  return /@resend\.dev$/i.test(email.trim());
+}
+
 export class EmailService {
   async send(message: EmailMessage): Promise<EmailSendResult> {
     if (!env.RESEND_API_KEY) {
       return { status: 'SKIPPED', provider: 'resend', errorMessage: 'RESEND_API_KEY is not configured' };
+    }
+
+    if (env.NODE_ENV === 'production' && usesResendTestSender() && !isResendTestRecipient(message.to)) {
+      const errorMessage = `Production EMAIL_FROM is still using Resend's test domain (${env.EMAIL_FROM}). Configure EMAIL_FROM with a sender on a verified domain before sending to real users.`;
+      console.error('Resend email blocked', errorMessage);
+      return { status: 'FAILED', provider: 'resend', errorMessage };
     }
 
     try {
