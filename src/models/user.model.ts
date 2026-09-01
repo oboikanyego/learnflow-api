@@ -9,6 +9,15 @@ export interface NotificationPreferences {
   weeklyReviewEmails: boolean;
 }
 
+export interface OnboardingProfile {
+  completedAt?: Date;
+  learningGoal?: string;
+  weeklyMinutesTarget?: number;
+  preferredDays?: string[];
+  preferredTime?: string;
+  targetDate?: Date;
+}
+
 export type EntitlementPlan = 'FREE' | 'PRO';
 export type EntitlementStatus = 'ACTIVE' | 'INACTIVE' | 'GRACE';
 
@@ -29,6 +38,7 @@ export interface UserDocument {
   lastSeenAt?: Date;
   entitlement: Entitlement;
   notificationPreferences: NotificationPreferences;
+  onboarding?: OnboardingProfile;
   passwordResetTokenHash?: string;
   passwordResetExpiresAt?: Date;
   createdAt: Date;
@@ -56,6 +66,14 @@ const userSchema = new Schema<UserDocument>({
     missedSessionEmails: { type: Boolean, default: true },
     celebrationEmails: { type: Boolean, default: true },
     weeklyReviewEmails: { type: Boolean, default: false }
+  },
+  onboarding: {
+    completedAt: Date,
+    learningGoal: { type: String, trim: true, maxlength: 160 },
+    weeklyMinutesTarget: { type: Number, min: 30, max: 10080 },
+    preferredDays: [{ type: String, trim: true }],
+    preferredTime: { type: String, trim: true },
+    targetDate: Date
   },
   passwordResetTokenHash: { type: String, select: false },
   passwordResetExpiresAt: { type: Date, select: false }
