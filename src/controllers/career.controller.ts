@@ -43,14 +43,22 @@ export async function upsertCareerTarget(req: AuthenticatedRequest, res: Respons
   } catch (error) { next(error); }
 }
 
+export async function listCareerLessons(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  try {
+    const ownerId = req.user!.id;
+    const lessons = await LessonModel.find({ ownerId, status: 'COMPLETED' }).select('title masteryScore confidenceScore assessmentAttempts completedAt').sort({ completedAt: -1 }).limit(100).lean();
+    res.json(lessons.map(item => ({ id: String(item._id), title: item.title, masteryScore: item.masteryScore ?? null, confidenceScore: item.confidenceScore ?? null, assessmentAttempts: item.assessmentAttempts ?? 0, completedAt: item.completedAt })));
+  } catch (error) { next(error); }
+}
+
 export async function addSkillEvidence(req: AuthenticatedRequest, res: Response, next: NextFunction) {
   try {
     const ownerId = req.user!.id;
     const input = evidenceSchema.parse(req.body);
     if (input.evidenceType === 'LESSON') {
       if (!input.lessonId) return res.status(400).json({ message: 'lessonId is required for lesson evidence.' });
-      const lesson = await LessonModel.findOne({ _id: input.lessonId, ownerId }).select('_id').lean();
-      if (!lesson) return res.status(404).json({ message: 'Lesson not found.' });
+      const lesson = await LessonModel.findOne({ _id: input.lessonId, ownerId, status: 'COMPLETED' }).select('_id').lean();
+      if (!lesson) return res.status(404).json({ message: 'Completed lesson not found.' });
     }
     const evidence = await SkillEvidenceModel.create({ ...input, skillName: input.skillName.trim(), ownerId });
     res.status(201).json(evidence);
