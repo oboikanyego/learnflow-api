@@ -11,7 +11,8 @@ const reviewSchema = z.object({ confidenceScore: z.number().int().min(1).max(5) 
 function intervalDays(stage: number, confidence: number) {
   if (confidence <= 2) return 1;
   const intervals = confidence === 3 ? [1, 3, 7, 14, 30, 60] : [3, 7, 14, 30, 60, 120];
-  return intervals[Math.min(stage, intervals.length - 1)];
+  const index = Math.min(stage, intervals.length - 1);
+  return intervals[index] ?? intervals.at(-1) ?? 1;
 }
 
 export function nextReviewDate(stage: number, confidence: number, now = new Date()) {
