@@ -72,15 +72,16 @@ function analyseMatch(requirements: Array<{ name: string; targetLevel: SkillLeve
   });
   const required = rows.filter(row => row.importance === 'REQUIRED');
   const preferred = rows.filter(row => row.importance === 'PREFERRED');
-  const requiredScore = required.length ? required.filter(row => row.met).length / required.length : 1;
-  const preferredScore = preferred.length ? preferred.filter(row => row.met).length / preferred.length : 1;
-  const score = Math.round((requiredScore * 0.8 + preferredScore * 0.2) * 100);
+  const requiredScore = required.length ? required.filter(row => row.met).length / required.length : 0;
+  const preferredScore = preferred.length ? preferred.filter(row => row.met).length / preferred.length : 0;
+  const totalWeight = (required.length ? 0.8 : 0) + (preferred.length ? 0.2 : 0);
+  const score = totalWeight ? Math.round(((requiredScore * (required.length ? 0.8 : 0)) + (preferredScore * (preferred.length ? 0.2 : 0))) / totalWeight * 100) : 0;
   return { score, matched: rows.filter(row => row.met), gaps: rows.filter(row => !row.met), requirements: rows };
 }
 
 function talkingPoints(match: ReturnType<typeof analyseMatch>) {
   return match.matched.slice(0, 6).map(item => {
-    const strongest = item.evidence[0];
+    const strongest = [...item.evidence].sort((a,b) => rank[b.level] - rank[a.level])[0];
     return strongest
       ? `${item.name}: evidence from ${strongest.title}${typeof strongest.masteryScore === 'number' ? ` with ${strongest.masteryScore}% mastery` : ''}.`
       : `${item.name}: evidence-backed requirement met.`;
