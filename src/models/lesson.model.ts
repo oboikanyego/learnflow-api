@@ -21,6 +21,11 @@ export interface LessonDocument {
   completedAt?: Date;
   evidenceUrl?: string;
   notes?: string;
+  confidenceScore?: number;
+  reviewStage: number;
+  nextReviewAt?: Date;
+  lastReviewedAt?: Date;
+  reviewCount: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -42,8 +47,14 @@ const schema = new Schema<LessonDocument>({
   missedAt: Date,
   completedAt: Date,
   evidenceUrl: String,
-  notes: { type: String, maxlength: 5000 }
+  notes: { type: String, maxlength: 5000 },
+  confidenceScore: { type: Number, min: 1, max: 5 },
+  reviewStage: { type: Number, min: 0, max: 10, default: 0 },
+  nextReviewAt: { type: Date, index: true },
+  lastReviewedAt: Date,
+  reviewCount: { type: Number, min: 0, default: 0 }
 }, { timestamps: true });
 schema.index({ ownerId: 1, moduleId: 1, position: 1 });
 schema.index({ status: 1, scheduledAt: 1, reminderSentAt: 1 });
+schema.index({ ownerId: 1, nextReviewAt: 1 });
 export const LessonModel = model<LessonDocument>('Lesson', schema);
