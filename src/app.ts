@@ -5,6 +5,7 @@ import morgan from 'morgan';
 import swaggerUi from 'swagger-ui-express';
 import { env } from './config/env.js';
 import { openApiDocument } from './docs/openapi.js';
+import { lessonVideoOpenApiPaths } from './docs/video-openapi.js';
 import { errorHandler } from './middleware/error-handler.js';
 import { adminRouter } from './routes/admin.routes.js';
 import { aiRouter } from './routes/ai.routes.js';
@@ -31,6 +32,12 @@ import { studySessionRouter } from './routes/study-session.routes.js';
 import { systemRouter } from './routes/system.routes.js';
 import { pingRedis } from './services/redis.service.js';
 
+const apiDocsDocument = {
+  ...openApiDocument,
+  tags: [...openApiDocument.tags, { name: 'Lesson Videos', description: 'AI-assisted YouTube discovery for LearnFlow lessons' }],
+  paths: { ...openApiDocument.paths, ...lessonVideoOpenApiPaths }
+};
+
 export const app = express();
 
 app.disable('x-powered-by');
@@ -39,7 +46,7 @@ app.use(cors({ origin: env.CLIENT_ORIGIN }));
 app.use(express.json({ limit: '1mb' }));
 app.use(morgan('combined'));
 
-app.get('/api-docs.json', (_req, res) => res.json(openApiDocument));
+app.get('/api-docs.json', (_req, res) => res.json(apiDocsDocument));
 app.use(
   '/api-docs',
   (_req: Request, res: Response, next: NextFunction) => {
@@ -49,7 +56,7 @@ app.use(
     next();
   },
   swaggerUi.serve,
-  swaggerUi.setup(openApiDocument, {
+  swaggerUi.setup(apiDocsDocument, {
     customSiteTitle: 'LearnFlow API Docs',
     customCss: '.swagger-ui .topbar { display: none } .swagger-ui .info { margin: 32px 0 }',
     swaggerOptions: {
