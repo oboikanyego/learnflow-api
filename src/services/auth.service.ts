@@ -24,13 +24,13 @@ export class AuthService {
     if (await userRepository.findByEmail(input.email)) throw Object.assign(new Error('Email already registered'), { statusCode: 409 });
     const passwordHash = await bcrypt.hash(input.password, 12);
     const user = await userRepository.create({ name: input.name, email: input.email, passwordHash, timezone: input.timezone });
-    return this.toAuthResponse(user.id, user.name, user.email, user.role, user.timezone, DEFAULT_ENTITLEMENT);
+    return this.toAuthResponse(user.id, user.name, user.email, user.role, user.timezone, DEFAULT_ENTITLEMENT, user.profileImageUrl);
   }
 
   async login(email: string, password: string) {
     const user = await userRepository.findByEmail(email, true);
     if (!user || !(await bcrypt.compare(password, user.passwordHash))) throw Object.assign(new Error('Invalid email or password'), { statusCode: 401 });
-    return this.toAuthResponse(user.id, user.name, user.email, user.role, user.timezone, user.entitlement ?? DEFAULT_ENTITLEMENT);
+    return this.toAuthResponse(user.id, user.name, user.email, user.role, user.timezone, user.entitlement ?? DEFAULT_ENTITLEMENT, user.profileImageUrl);
   }
 
   async me(userId: string) {
@@ -42,6 +42,7 @@ export class AuthService {
       email: user.email,
       role: user.role,
       timezone: user.timezone,
+      profileImageUrl: user.profileImageUrl,
       entitlement: { ...DEFAULT_ENTITLEMENT, ...(user.entitlement ?? {}) },
       notificationPreferences: { ...DEFAULT_PREFERENCES, ...(user.notificationPreferences ?? {}) }
     };
@@ -50,7 +51,15 @@ export class AuthService {
   async updateProfile(userId: string, input: { name: string; timezone: string }) {
     const user = await UserModel.findByIdAndUpdate(userId, { $set: { name: input.name, timezone: input.timezone } }, { new: true }).lean();
     if (!user) throw Object.assign(new Error('User not found'), { statusCode: 404 });
-    return { id: String(user._id), name: user.name, email: user.email, role: user.role, timezone: user.timezone, entitlement: { ...DEFAULT_ENTITLEMENT, ...(user.entitlement ?? {}) } };
+    return {
+      id: String(user._id),
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      timezone: user.timezone,
+      profileImageUrl: user.profileImageUrl,
+      entitlement: { ...DEFAULT_ENTITLEMENT, ...(user.entitlement ?? {}) }
+    };
   }
 
   async changePassword(userId: string, currentPassword: string, newPassword: string) {
@@ -156,9 +165,9 @@ export class AuthService {
     return { message: 'Password updated successfully. You can now sign in with your new password.' };
   }
 
-  private toAuthResponse(id: string, name: string, email: string, role: string, timezone: string, entitlement: Entitlement) {
+  private toAuthResponse(id: string, name: string, email: string, role: string, timezone: string, entitlement: Entitlement, profileImageUrl?: string) {
     const token = jwt.sign({ sub: id, role }, env.JWT_SECRET, { expiresIn: env.JWT_EXPIRES_IN as jwt.SignOptions['expiresIn'] });
-    return { token, user: { id, name, email, role, timezone, entitlement: { ...DEFAULT_ENTITLEMENT, ...(entitlement ?? {}) } } };
+    return { token, user: { id, name, email, role, timezone, profileImageUrl, entitlement: { ...DEFAULT_ENTITLEMENT, ...(entitlement ?? {}) } } };
   }
 }
 
