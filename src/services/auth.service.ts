@@ -6,6 +6,7 @@ import { userRepository } from '../repositories/user.repository.js';
 import { UserModel, type Entitlement, type NotificationPreferences } from '../models/user.model.js';
 import { brandedEmail } from './email-template.service.js';
 import { emailService } from './email.service.js';
+import { calculateAge, getSystemLimit, SYSTEM_LIMIT_KEYS } from './system-limit.service.js';
 
 const RESET_TTL_MS = 30 * 60 * 1000;
 const GENERIC_RESET_MESSAGE = 'If an account exists for that email, a password reset link has been sent.';
@@ -20,17 +21,18 @@ const DEFAULT_PREFERENCES: NotificationPreferences = {
 const DEFAULT_ENTITLEMENT: Entitlement = { plan: 'FREE', status: 'ACTIVE', source: 'SYSTEM' };
 
 export class AuthService {
-  async register(input: { name: string; email: string; password: string; timezone: string }) {
+  async register(input: { name: string; email: string; password: string; timezone: string; dateOfBirth: Date }) {
+    await this.validateDateOfBirth(input.dateOfBirth);
     if (await userRepository.findByEmail(input.email)) throw Object.assign(new Error('Email already registered'), { statusCode: 409 });
     const passwordHash = await bcrypt.hash(input.password, 12);
-    const user = await userRepository.create({ name: input.name, email: input.email, passwordHash, timezone: input.timezone });
-    return this.toAuthResponse(user.id, user.name, user.email, user.role, user.timezone, DEFAULT_ENTITLEMENT, user.profileImageUrl);
+    const user = await userRepository.create({ name: input.name, email: input.email, passwordHash, timezone: input.timezone, dateOfBirth: input.dateOfBirth });
+    return this.toAuthResponse(user.id, user.name, user.email, user.role, user.timezone, DEFAULT_ENTITLEMENT, user.profileImageUrl, user.dateOfBirth);
   }
 
   async login(email: string, password: string) {
     const user = await userRepository.findByEmail(email, true);
     if (!user || !(await bcrypt.compare(password, user.passwordHash))) throw Object.assign(new Error('Invalid email or password'), { statusCode: 401 });
-    return this.toAuthResponse(user.id, user.name, user.email, user.role, user.timezone, user.entitlement ?? DEFAULT_ENTITLEMENT, user.profileImageUrl);
+    return this.toAuthResponse(user.id, user.name, user.email, user.role, user.timezone, user.entitlement ?? DEFAULT_ENTITLEMENT, user.profileImageUrl, user.dateOfBirth);
   }
 
   async me(userId: string) {
@@ -42,14 +44,20 @@ export class AuthService {
       email: user.email,
       role: user.role,
       timezone: user.timezone,
+      dateOfBirth: user.dateOfBirth,
       profileImageUrl: user.profileImageUrl,
       entitlement: { ...DEFAULT_ENTITLEMENT, ...(user.entitlement ?? {}) },
       notificationPreferences: { ...DEFAULT_PREFERENCES, ...(user.notificationPreferences ?? {}) }
     };
   }
 
-  async updateProfile(userId: string, input: { name: string; timezone: string }) {
-    const user = await UserModel.findByIdAndUpdate(userId, { $set: { name: input.name, timezone: input.timezone } }, { new: true }).lean();
+  async updateProfile(userId: string, input: { name: string; timezone: string; dateOfBirth?: Date }) {
+    if (input.dateOfBirth) await this.validateDateOfBirth(input.dateOfBirth);
+    const user = await UserModel.findByIdAndUpdate(
+      userId,
+      { $set: { name: input.name, timezone: input.timezone, ...(input.dateOfBirth ? { dateOfBirth: input.dateOfBirth } : {}) } },
+      { new: true }
+    ).lean();
     if (!user) throw Object.assign(new Error('User not found'), { statusCode: 404 });
     return {
       id: String(user._id),
@@ -57,6 +65,7 @@ export class AuthService {
       email: user.email,
       role: user.role,
       timezone: user.timezone,
+      dateOfBirth: user.dateOfBirth,
       profileImageUrl: user.profileImageUrl,
       entitlement: { ...DEFAULT_ENTITLEMENT, ...(user.entitlement ?? {}) }
     };
@@ -165,9 +174,18 @@ export class AuthService {
     return { message: 'Password updated successfully. You can now sign in with your new password.' };
   }
 
-  private toAuthResponse(id: string, name: string, email: string, role: string, timezone: string, entitlement: Entitlement, profileImageUrl?: string) {
+  private async validateDateOfBirth(dateOfBirth: Date): Promise<void> {
+    const now = new Date();
+    if (Number.isNaN(dateOfBirth.getTime()) || dateOfBirth > now) throw Object.assign(new Error('Enter a valid date of birth.'), { statusCode: 400 });
+    const age = calculateAge(dateOfBirth, now);
+    if (age > 120) throw Object.assign(new Error('Enter a valid date of birth.'), { statusCode: 400 });
+    const minimumAge = await getSystemLimit(SYSTEM_LIMIT_KEYS.ACCOUNT_MIN_REGISTRATION_AGE);
+    if (age < minimumAge) throw Object.assign(new Error(`You must be at least ${minimumAge} years old to create a LearnFlow account.`), { statusCode: 400 });
+  }
+
+  private toAuthResponse(id: string, name: string, email: string, role: string, timezone: string, entitlement: Entitlement, profileImageUrl?: string, dateOfBirth?: Date) {
     const token = jwt.sign({ sub: id, role }, env.JWT_SECRET, { expiresIn: env.JWT_EXPIRES_IN as jwt.SignOptions['expiresIn'] });
-    return { token, user: { id, name, email, role, timezone, profileImageUrl, entitlement: { ...DEFAULT_ENTITLEMENT, ...(entitlement ?? {}) } } };
+    return { token, user: { id, name, email, role, timezone, dateOfBirth, profileImageUrl, entitlement: { ...DEFAULT_ENTITLEMENT, ...(entitlement ?? {}) } } };
   }
 }
 
