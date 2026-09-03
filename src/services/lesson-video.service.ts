@@ -74,7 +74,8 @@ export async function findLessonVideos(ownerId: string, lessonId: string, userQu
     .lean();
   if (!lesson) throw Object.assign(new Error('Lesson not found'), { statusCode: 404 });
 
-  if (!env.YOUTUBE_API_KEY) {
+  const youtubeApiKey = env.YOUTUBE_API_KEY;
+  if (!youtubeApiKey) {
     throw Object.assign(
       new Error('YouTube video search is not configured. Set YOUTUBE_API_KEY on the API service.'),
       { statusCode: 503, exposeMessage: true }
@@ -128,7 +129,7 @@ export async function findLessonVideos(ownerId: string, lessonId: string, userQu
     url.searchParams.set('maxResults', '8');
     url.searchParams.set('relevanceLanguage', 'en');
     url.searchParams.set('q', aiQuery);
-    url.searchParams.set('key', env.YOUTUBE_API_KEY);
+    url.searchParams.set('key', youtubeApiKey);
 
     const response = await fetch(url, { headers: { Accept: 'application/json' } });
     const body = await response.json() as YouTubeSearchResponse;
