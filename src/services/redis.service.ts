@@ -11,6 +11,11 @@ export interface RedisHealth {
   error?: string;
 }
 
+export interface RedisWindowCounter {
+  count: number;
+  ttlSeconds: number;
+}
+
 export const redisKeys = {
   learningPaths: (ownerId: string) => `user:${ownerId}:learning-paths`,
   learningPath: (ownerId: string, learningPathId: string) => `user:${ownerId}:learning-path:${learningPathId}`,
@@ -89,6 +94,28 @@ export async function cachedJson<T>(key: string, ttlSeconds: number, loader: () 
   }
 
   return value;
+}
+
+export async function incrementWindowCounter(key: string, windowSeconds: number): Promise<RedisWindowCounter | undefined> {
+  const client = getCacheConnection();
+  if (!client) return undefined;
+  const redisKey = namespaced(key);
+
+  try {
+    const result = await client.eval(
+      `local count = redis.call('INCR', KEYS[1])\n` +
+      `if count == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end\n` +
+      `local ttl = redis.call('TTL', KEYS[1])\n` +
+      `return {count, ttl}`,
+      1,
+      redisKey,
+      String(windowSeconds)
+    ) as [number, number];
+    return { count: Number(result[0]), ttlSeconds: Math.max(1, Number(result[1])) };
+  } catch (error) {
+    console.warn(`[redis-cache] counter failed for ${key}: ${error instanceof Error ? error.message : String(error)}`);
+    return undefined;
+  }
 }
 
 export async function invalidateCacheKeys(...keys: Array<string | undefined>): Promise<void> {
