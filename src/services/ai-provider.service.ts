@@ -96,36 +96,58 @@ function emptyProviderResponseError(provider: AiProvider): ProviderHttpError {
   return error;
 }
 
-async function requestProvider(provider: AiProvider, prompt: string, options: AiGenerationOptions = {}): Promise<string> {
-  if (provider === 'groq') {
-    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: env.GROQ_MODEL,
-        temperature: options.responseSchema ? 0.1 : 0.35,
-        messages: [
-          { role: 'system', content: 'You are LearnFlow, a practical learning coach. Be concise, structured and action-oriented.' },
-          { role: 'user', content: prompt }
-        ],
-        ...(options.responseSchema ? {
-          response_format: {
-            type: 'json_schema',
-            json_schema: {
-              name: options.schemaName ?? 'learnflow_response',
-              strict: true,
-              schema: options.responseSchema
-            }
-          }
-        } : {})
-      })
-    });
-    if (!response.ok) throw await providerRequestError(provider, response);
-    const data = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
-    const text = data.choices?.[0]?.message?.content?.trim() ?? '';
-    if (!text) throw emptyProviderResponseError(provider);
-    return text;
+function isGroqStructuredValidationFailure(status: number, detail: string): boolean {
+  return status === 400 && /failed to validate json|failed_generation|json schema/i.test(detail);
+}
+
+async function parseGroqResponse(response: Response): Promise<string> {
+  const data = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
+  const text = data.choices?.[0]?.message?.content?.trim() ?? '';
+  if (!text) throw emptyProviderResponseError('groq');
+  return text;
+}
+
+async function requestGroq(prompt: string, options: AiGenerationOptions): Promise<string> {
+  const messages = [
+    { role: 'system', content: 'You are LearnFlow, a practical learning coach. Be concise, structured and action-oriented. When JSON is requested, return JSON only.' },
+    { role: 'user', content: prompt }
+  ];
+
+  const makeRequest = (responseFormat?: Record<string, unknown>) => fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: env.GROQ_MODEL,
+      temperature: options.responseSchema ? 0.1 : 0.35,
+      ...(options.responseSchema ? { reasoning_effort: 'low' } : {}),
+      messages,
+      ...(responseFormat ? { response_format: responseFormat } : {})
+    })
+  });
+
+  let response = await makeRequest(options.responseSchema ? {
+    type: 'json_schema',
+    json_schema: {
+      name: options.schemaName ?? 'learnflow_response',
+      strict: true,
+      schema: options.responseSchema
+    }
+  } : undefined);
+
+  if (!response.ok && options.responseSchema) {
+    const detail = extractProviderMessage(await response.clone().text());
+    if (isGroqStructuredValidationFailure(response.status, detail)) {
+      console.warn('[ai] Groq strict structured output failed validation; retrying the same request in JSON object mode.');
+      response = await makeRequest({ type: 'json_object' });
+    }
   }
+
+  if (!response.ok) throw await providerRequestError('groq', response);
+  return parseGroqResponse(response);
+}
+
+async function requestProvider(provider: AiProvider, prompt: string, options: AiGenerationOptions = {}): Promise<string> {
+  if (provider === 'groq') return requestGroq(prompt, options);
 
   if (provider === 'gemini') {
     const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(env.GEMINI_MODEL)}:generateContent?key=${encodeURIComponent(env.GEMINI_API_KEY ?? '')}`, {
