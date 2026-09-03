@@ -19,6 +19,8 @@ services:
         value: 7d
       - key: REDIS_URL
         sync: false
+      - key: CLOUDINARY_URL
+        sync: false
       - key: AI_QUEUE_CONCURRENCY
         value: 2
       - key: AI_PROVIDER
