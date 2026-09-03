@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import multer from 'multer';
-import { changePassword, forgotPassword, login, me, register, resetPassword, testEmail, updateNotificationPreferences, updateProfile } from '../controllers/auth.controller.js';
+import { changePassword, forgotPassword, login, me, register, registrationPolicy, resetPassword, testEmail, updateNotificationPreferences, updateProfile } from '../controllers/auth.controller.js';
 import { removeProfileImageController, uploadProfileImageController } from '../controllers/profile-image.controller.js';
 import { requireAuth } from '../middleware/auth.middleware.js';
 
@@ -17,6 +17,7 @@ const profileImageUpload = multer({
 });
 
 export const authRouter = Router();
+authRouter.get('/registration-policy', registrationPolicy);
 authRouter.post('/register', register);
 authRouter.post('/login', login);
 authRouter.post('/forgot-password', forgotPassword);
