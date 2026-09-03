@@ -5,9 +5,11 @@ import { reminderWorker } from './services/reminder-worker.service.js';
 import { startAiPlanWorker } from './services/ai-plan-queue.service.js';
 import { billingGraceWorker } from './services/billing-grace-worker.service.js';
 import { weeklyReviewWorker } from './services/weekly-review-worker.service.js';
+import { seedSystemLimits } from './services/system-limit.service.js';
 
 async function bootstrap() {
   await connectDatabase();
+  await seedSystemLimits();
   reminderWorker.start();
   billingGraceWorker.start();
   weeklyReviewWorker.start();
