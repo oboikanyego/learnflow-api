@@ -35,6 +35,8 @@ export interface UserDocument {
   passwordHash: string;
   timezone: string;
   role: 'learner' | 'admin';
+  profileImageUrl?: string;
+  profileImagePublicId?: string;
   lastSeenAt?: Date;
   entitlement: Entitlement;
   notificationPreferences: NotificationPreferences;
@@ -51,6 +53,8 @@ const userSchema = new Schema<UserDocument>({
   passwordHash: { type: String, required: true, select: false },
   timezone: { type: String, required: true, default: 'UTC' },
   role: { type: String, enum: ['learner', 'admin'], default: 'learner' },
+  profileImageUrl: { type: String, trim: true },
+  profileImagePublicId: { type: String, trim: true },
   lastSeenAt: { type: Date, index: true },
   entitlement: {
     plan: { type: String, enum: ['FREE', 'PRO'], default: 'FREE' },
