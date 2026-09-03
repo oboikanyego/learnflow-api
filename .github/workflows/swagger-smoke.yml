@@ -1,0 +1,67 @@
+name: Deployed Swagger Smoke Test
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/swagger-smoke.yml'
+      - 'package.json'
+      - 'src/app.ts'
+      - 'src/docs/openapi.ts'
+  workflow_dispatch:
+
+jobs:
+  verify-swagger:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      API_URL: https://learnflow-api-njgz.onrender.com
+    steps:
+      - name: Wait for OpenAPI JSON and validate spec
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          for attempt in $(seq 1 40); do
+            status=$(curl --silent --show-error \
+              --connect-timeout 10 \
+              --max-time 30 \
+              -o openapi.json \
+              -w '%{http_code}' \
+              "${API_URL}/api-docs.json" || true)
+
+            if [ "$status" = "200" ]; then
+              jq -e '.openapi == "3.1.0"' openapi.json >/dev/null
+              jq -e '.info.title == "LearnFlow API"' openapi.json >/dev/null
+              jq -e '.components.securitySchemes.bearerAuth.scheme == "bearer"' openapi.json >/dev/null
+              jq -e '.paths["/api/v1/auth/login"].post' openapi.json >/dev/null
+              jq -e '.paths["/api/v1/ai/generate-plan/background"].post' openapi.json >/dev/null
+              echo 'OpenAPI JSON is deployed and valid.'
+              break
+            fi
+
+            if [ "$status" = "404" ] || [ "$status" = "502" ] || [ "$status" = "503" ] || [ "$status" = "000" ]; then
+              echo "Swagger spec not ready (HTTP ${status}); retry ${attempt}/40"
+              sleep 15
+              continue
+            fi
+
+            echo "Unexpected OpenAPI response: HTTP ${status}"
+            if [ -f openapi.json ]; then cat openapi.json; fi
+            exit 1
+          done
+
+          test -f openapi.json
+          jq -e '.openapi == "3.1.0"' openapi.json >/dev/null
+
+      - name: Verify Swagger UI page
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --silent --show-error \
+            --connect-timeout 10 \
+            --max-time 30 \
+            "${API_URL}/api-docs/" > swagger.html
+
+          grep -qi 'swagger' swagger.html
+          echo 'Swagger UI is reachable on the deployed LearnFlow API.'
