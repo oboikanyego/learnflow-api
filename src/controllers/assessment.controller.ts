@@ -6,6 +6,7 @@ import { AssessmentAttemptModel, AssessmentModel } from '../models/assessment.mo
 import { LessonModel } from '../models/lesson.model.js';
 import { generateAiText, getAiProviderInfo } from '../services/ai-provider.service.js';
 import { completeAiUsage, reserveAiUsage } from '../services/ai-usage.service.js';
+import { invalidateLearningCache } from '../services/redis.service.js';
 
 const DAY = 86_400_000;
 const idSchema = z.string().refine(Types.ObjectId.isValid, 'Invalid id');
@@ -97,6 +98,7 @@ export async function submitAssessment(req: AuthenticatedRequest, res: Response,
       $set: { masteryScore: score, lastAssessedAt: completedAt, confidenceScore: confidenceFromScore, nextReviewAt: new Date(completedAt.getTime() + reviewDelay * DAY) },
       $inc: { assessmentAttempts: 1 }
     });
+    await invalidateLearningCache(ownerId, { learningPathId: String(assessment.learningPathId), lessonId: String(assessment.lessonId), invalidatePathList: false, invalidateAnalytics: false });
 
     res.json({ attemptId: String(attempt._id), score, correctAnswers, totalQuestions: assessment.questions.length, passed: score >= 70, masteryBand: score >= 90 ? 'MASTERED' : score >= 70 ? 'DEVELOPING' : 'NEEDS_REVIEW', results });
   } catch (error) { next(error); }
