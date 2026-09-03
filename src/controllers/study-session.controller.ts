@@ -4,6 +4,7 @@ import { z } from 'zod';
 import type { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import { LessonModel } from '../models/lesson.model.js';
 import { StudySessionModel } from '../models/study-session.model.js';
+import { invalidateLearningCache } from '../services/redis.service.js';
 import { nextReviewDate } from './retention.controller.js';
 
 const idSchema = z.string().refine(Types.ObjectId.isValid, 'Invalid id');
@@ -24,7 +25,10 @@ export async function startStudySession(req: AuthenticatedRequest, res: Response
     if (existing) return res.json({ ...existing.toObject(), elapsedSeconds: elapsedNow(existing) });
     const now = new Date();
     const session = await StudySessionModel.create({ ownerId, lessonId, learningPathId: lesson.learningPathId, status: 'ACTIVE', startedAt: now, lastResumedAt: now });
-    if (lesson.status !== 'COMPLETED') await LessonModel.updateOne({ _id: lessonId, ownerId }, { $set: { status: 'IN_PROGRESS' } });
+    if (lesson.status !== 'COMPLETED') {
+      await LessonModel.updateOne({ _id: lessonId, ownerId }, { $set: { status: 'IN_PROGRESS' } });
+      await invalidateLearningCache(ownerId, { learningPathId: String(lesson.learningPathId), lessonId, invalidatePathList: false });
+    }
     res.status(201).json(session);
   } catch (error) { next(error); }
 }
@@ -58,6 +62,7 @@ export async function completeStudySession(req: AuthenticatedRequest, res: Respo
     await session.save();
     const confidence = input.confidenceScore ?? 3;
     await LessonModel.updateOne({ _id: session.lessonId, ownerId }, { $set: { status: 'COMPLETED', completedAt: session.endedAt, confidenceScore: confidence, reviewStage: 0, nextReviewAt: nextReviewDate(0, confidence, session.endedAt) } });
+    await invalidateLearningCache(ownerId, { learningPathId: String(session.learningPathId), lessonId: String(session.lessonId), invalidatePathList: false });
     res.json({ ...session.toObject(), confidenceScore: confidence });
   } catch (error) { next(error); }
 }
