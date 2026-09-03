@@ -3,7 +3,7 @@ import { Types } from 'mongoose';
 import { env } from '../config/env.js';
 import { LessonModel } from '../models/lesson.model.js';
 import { generateAiText, getAiProviderInfo } from './ai-provider.service.js';
-import { cachedJson } from './redis.service.js';
+import { cachedJson, incrementWindowCounter, invalidateLearningCache } from './redis.service.js';
 
 export interface LessonVideoSearchResult {
   videoId: string;
@@ -14,11 +14,31 @@ export interface LessonVideoSearchResult {
   thumbnailUrl: string;
   watchUrl: string;
   embedUrl: string;
+  durationIso: string;
+  durationSeconds: number;
+  durationLabel: string;
+  hasCaptions: boolean;
+  madeForKids: boolean;
+  trackingDisabled: boolean;
+  embeddable: boolean;
+  privacyStatus: string;
+}
+
+interface YouTubeApiError {
+  message?: string;
+  errors?: Array<{ reason?: string; message?: string }>;
 }
 
 interface YouTubeSearchResponse {
   items?: Array<{
     id?: { videoId?: string };
+  }>;
+  error?: YouTubeApiError;
+}
+
+interface YouTubeVideosResponse {
+  items?: Array<{
+    id?: string;
     snippet?: {
       title?: string;
       description?: string;
@@ -30,11 +50,26 @@ interface YouTubeSearchResponse {
         default?: { url?: string };
       };
     };
+    contentDetails?: {
+      duration?: string;
+      caption?: string;
+    };
+    status?: {
+      embeddable?: boolean;
+      privacyStatus?: string;
+      madeForKids?: boolean;
+    };
   }>;
-  error?: { message?: string };
+  error?: YouTubeApiError;
+}
+
+interface LocalCounter {
+  count: number;
+  expiresAt: number;
 }
 
 const VIDEO_CACHE_SECONDS = 6 * 60 * 60;
+const fallbackCounters = new Map<string, LocalCounter>();
 
 export async function searchUserLessons(ownerId: string, query = '') {
   const normalized = query.trim();
@@ -50,7 +85,7 @@ export async function searchUserLessons(ownerId: string, query = '') {
   const lessons = await LessonModel.find(filter)
     .sort({ updatedAt: -1 })
     .limit(20)
-    .select('title description status scheduledAt durationMinutes learningPathId')
+    .select('title description status scheduledAt durationMinutes learningPathId resourceUrl')
     .lean();
 
   return lessons.map(lesson => ({
@@ -60,7 +95,8 @@ export async function searchUserLessons(ownerId: string, query = '') {
     status: lesson.status,
     scheduledAt: lesson.scheduledAt,
     durationMinutes: lesson.durationMinutes,
-    learningPathId: String(lesson.learningPathId)
+    learningPathId: String(lesson.learningPathId),
+    resourceUrl: lesson.resourceUrl ?? null
   }));
 }
 
@@ -70,7 +106,7 @@ export async function findLessonVideos(ownerId: string, lessonId: string, userQu
   }
 
   const lesson = await LessonModel.findOne({ _id: lessonId, ownerId })
-    .select('title description status durationMinutes')
+    .select('title description status durationMinutes resourceUrl')
     .lean();
   if (!lesson) throw Object.assign(new Error('Lesson not found'), { statusCode: 404 });
 
@@ -88,6 +124,8 @@ export async function findLessonVideos(ownerId: string, lessonId: string, userQu
     .digest('hex');
 
   return cachedJson(`user:${ownerId}:lesson-videos:${cacheHash}`, VIDEO_CACHE_SECONDS, async () => {
+    await enforceSearchAllowance(ownerId);
+
     const fallbackQuery = `${lesson.title} tutorial ${normalizedUserQuery}`.trim();
     let aiQuery = fallbackQuery;
     let aiEnhanced = false;
@@ -119,44 +157,29 @@ export async function findLessonVideos(ownerId: string, lessonId: string, userQu
       }
     }
 
-    const url = new URL('https://www.googleapis.com/youtube/v3/search');
-    url.searchParams.set('part', 'snippet');
-    url.searchParams.set('type', 'video');
-    url.searchParams.set('videoEmbeddable', 'true');
-    url.searchParams.set('videoSyndicated', 'true');
-    url.searchParams.set('safeSearch', 'moderate');
-    url.searchParams.set('order', 'relevance');
-    url.searchParams.set('maxResults', '8');
-    url.searchParams.set('relevanceLanguage', 'en');
-    url.searchParams.set('q', aiQuery);
-    url.searchParams.set('key', youtubeApiKey);
+    const searchUrl = new URL('https://www.googleapis.com/youtube/v3/search');
+    searchUrl.searchParams.set('part', 'snippet');
+    searchUrl.searchParams.set('type', 'video');
+    searchUrl.searchParams.set('videoEmbeddable', 'true');
+    searchUrl.searchParams.set('videoSyndicated', 'true');
+    searchUrl.searchParams.set('safeSearch', 'moderate');
+    searchUrl.searchParams.set('order', 'relevance');
+    searchUrl.searchParams.set('maxResults', '8');
+    searchUrl.searchParams.set('relevanceLanguage', 'en');
+    searchUrl.searchParams.set('q', aiQuery);
+    searchUrl.searchParams.set('key', youtubeApiKey);
 
-    const response = await fetch(url, { headers: { Accept: 'application/json' } });
-    const body = await response.json() as YouTubeSearchResponse;
-    if (!response.ok) {
-      throw Object.assign(
-        new Error(body.error?.message || 'YouTube search failed'),
-        { statusCode: response.status >= 500 ? 502 : response.status, exposeMessage: true }
-      );
-    }
+    const searchResponse = await fetch(searchUrl, { headers: { Accept: 'application/json' } });
+    const searchBody = await searchResponse.json() as YouTubeSearchResponse;
+    if (!searchResponse.ok) throwYoutubeError(searchResponse.status, searchBody.error, 'YouTube search failed');
 
-    const videos: LessonVideoSearchResult[] = (body.items ?? [])
-      .map(item => {
-        const videoId = item.id?.videoId;
-        if (!videoId) return null;
-        const snippet = item.snippet ?? {};
-        return {
-          videoId,
-          title: decodeEntities(snippet.title ?? 'YouTube video'),
-          description: decodeEntities(snippet.description ?? ''),
-          channelTitle: decodeEntities(snippet.channelTitle ?? 'YouTube'),
-          publishedAt: snippet.publishedAt ?? '',
-          thumbnailUrl: snippet.thumbnails?.high?.url ?? snippet.thumbnails?.medium?.url ?? snippet.thumbnails?.default?.url ?? '',
-          watchUrl: `https://www.youtube.com/watch?v=${videoId}`,
-          embedUrl: `https://www.youtube.com/embed/${videoId}`
-        } satisfies LessonVideoSearchResult;
-      })
-      .filter((video): video is LessonVideoSearchResult => Boolean(video));
+    const videoIds = (searchBody.items ?? [])
+      .map(item => item.id?.videoId)
+      .filter((value): value is string => Boolean(value));
+
+    const videos = videoIds.length
+      ? await loadVerifiedVideoMetadata(videoIds, youtubeApiKey)
+      : [];
 
     return {
       lesson: {
@@ -164,7 +187,8 @@ export async function findLessonVideos(ownerId: string, lessonId: string, userQu
         title: lesson.title,
         description: lesson.description ?? '',
         status: lesson.status,
-        durationMinutes: lesson.durationMinutes
+        durationMinutes: lesson.durationMinutes,
+        resourceUrl: lesson.resourceUrl ?? null
       },
       requestedQuery: normalizedUserQuery,
       searchQuery: aiQuery,
@@ -173,6 +197,136 @@ export async function findLessonVideos(ownerId: string, lessonId: string, userQu
       videos
     };
   });
+}
+
+export async function saveLessonVideoResource(ownerId: string, lessonId: string, videoId: string) {
+  if (!Types.ObjectId.isValid(lessonId)) {
+    throw Object.assign(new Error('Lesson not found'), { statusCode: 404 });
+  }
+  if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) {
+    throw Object.assign(new Error('Invalid YouTube video id'), { statusCode: 400 });
+  }
+
+  const resourceUrl = `https://www.youtube.com/watch?v=${videoId}`;
+  const lesson = await LessonModel.findOneAndUpdate(
+    { _id: lessonId, ownerId },
+    { $set: { resourceUrl } },
+    { new: true, runValidators: true }
+  );
+  if (!lesson) throw Object.assign(new Error('Lesson not found'), { statusCode: 404 });
+
+  await invalidateLearningCache(ownerId, {
+    learningPathId: String(lesson.learningPathId),
+    lessonId,
+    invalidatePathList: false
+  });
+
+  return { message: 'Video saved as the lesson resource.', resourceUrl, lesson };
+}
+
+async function loadVerifiedVideoMetadata(videoIds: string[], apiKey: string): Promise<LessonVideoSearchResult[]> {
+  const url = new URL('https://www.googleapis.com/youtube/v3/videos');
+  url.searchParams.set('part', 'snippet,contentDetails,status');
+  url.searchParams.set('id', videoIds.join(','));
+  url.searchParams.set('key', apiKey);
+
+  const response = await fetch(url, { headers: { Accept: 'application/json' } });
+  const body = await response.json() as YouTubeVideosResponse;
+  if (!response.ok) throwYoutubeError(response.status, body.error, 'YouTube video verification failed');
+
+  const byId = new Map((body.items ?? []).map(item => [item.id, item]));
+  return videoIds.flatMap(videoId => {
+    const item = byId.get(videoId);
+    if (!item || item.status?.embeddable !== true) return [];
+
+    const snippet = item.snippet ?? {};
+    const durationIso = item.contentDetails?.duration ?? 'PT0S';
+    const durationSeconds = parseIsoDurationSeconds(durationIso);
+    const madeForKids = item.status?.madeForKids === true;
+
+    return [{
+      videoId,
+      title: decodeEntities(snippet.title ?? 'YouTube video'),
+      description: decodeEntities(snippet.description ?? ''),
+      channelTitle: decodeEntities(snippet.channelTitle ?? 'YouTube'),
+      publishedAt: snippet.publishedAt ?? '',
+      thumbnailUrl: snippet.thumbnails?.high?.url ?? snippet.thumbnails?.medium?.url ?? snippet.thumbnails?.default?.url ?? '',
+      watchUrl: `https://www.youtube.com/watch?v=${videoId}`,
+      embedUrl: `https://www.youtube-nocookie.com/embed/${videoId}`,
+      durationIso,
+      durationSeconds,
+      durationLabel: formatDuration(durationSeconds),
+      hasCaptions: item.contentDetails?.caption === 'true',
+      madeForKids,
+      trackingDisabled: madeForKids,
+      embeddable: true,
+      privacyStatus: item.status?.privacyStatus ?? 'public'
+    } satisfies LessonVideoSearchResult];
+  });
+}
+
+async function enforceSearchAllowance(ownerId: string): Promise<void> {
+  await enforceLimit(`youtube:search:user:${ownerId}:hour`, env.YOUTUBE_SEARCH_USER_HOURLY_LIMIT, 60 * 60, 'hourly');
+  await enforceLimit(`youtube:search:user:${ownerId}:day`, env.YOUTUBE_SEARCH_USER_DAILY_LIMIT, 24 * 60 * 60, 'daily');
+  await enforceLimit('youtube:search:global:day', env.YOUTUBE_SEARCH_GLOBAL_DAILY_LIMIT, 24 * 60 * 60, 'global');
+}
+
+async function enforceLimit(key: string, limit: number, windowSeconds: number, scope: string): Promise<void> {
+  const redisCounter = await incrementWindowCounter(key, windowSeconds);
+  const counter = redisCounter ?? incrementLocalCounter(key, windowSeconds);
+  if (counter.count <= limit) return;
+
+  const resetsAt = new Date(Date.now() + counter.ttlSeconds * 1000).toISOString();
+  const message = scope === 'global'
+    ? 'LearnFlow has reached its protected YouTube search allowance. Previously discovered videos may still load from cache. Try another search later.'
+    : 'You have reached the lesson video search limit for this period. Previously discovered videos may still load from cache. Try again later.';
+  throw Object.assign(new Error(message), {
+    statusCode: 429,
+    exposeMessage: true,
+    quota: { scope, limit, used: counter.count },
+    resetsAt
+  });
+}
+
+function incrementLocalCounter(key: string, windowSeconds: number): { count: number; ttlSeconds: number } {
+  const now = Date.now();
+  const existing = fallbackCounters.get(key);
+  if (!existing || existing.expiresAt <= now) {
+    const next = { count: 1, expiresAt: now + windowSeconds * 1000 };
+    fallbackCounters.set(key, next);
+    return { count: 1, ttlSeconds: windowSeconds };
+  }
+  existing.count += 1;
+  return { count: existing.count, ttlSeconds: Math.max(1, Math.ceil((existing.expiresAt - now) / 1000)) };
+}
+
+function throwYoutubeError(status: number, error: YouTubeApiError | undefined, fallback: string): never {
+  const reasons = (error?.errors ?? []).map(item => item.reason).filter(Boolean);
+  if (status === 429 || reasons.some(reason => reason === 'quotaExceeded' || reason === 'dailyLimitExceeded' || reason === 'rateLimitExceeded')) {
+    throw Object.assign(
+      new Error('YouTube search capacity is currently exhausted. Your cached lesson videos remain available; try a new search later.'),
+      { statusCode: 429, exposeMessage: true, quota: { provider: 'youtube', reasons } }
+    );
+  }
+  throw Object.assign(
+    new Error(error?.message || fallback),
+    { statusCode: status >= 500 ? 502 : status, exposeMessage: true }
+  );
+}
+
+function parseIsoDurationSeconds(value: string): number {
+  const match = /^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/.exec(value);
+  if (!match) return 0;
+  return Number(match[1] ?? 0) * 3600 + Number(match[2] ?? 0) * 60 + Number(match[3] ?? 0);
+}
+
+function formatDuration(seconds: number): string {
+  if (seconds <= 0) return 'Duration unavailable';
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const remainingSeconds = seconds % 60;
+  if (hours) return `${hours}:${String(minutes).padStart(2, '0')}:${String(remainingSeconds).padStart(2, '0')}`;
+  return `${minutes}:${String(remainingSeconds).padStart(2, '0')}`;
 }
 
 function decodeEntities(value: string): string {
