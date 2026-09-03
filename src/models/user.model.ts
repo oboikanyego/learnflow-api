@@ -34,6 +34,7 @@ export interface UserDocument {
   email: string;
   passwordHash: string;
   timezone: string;
+  dateOfBirth?: Date;
   role: 'learner' | 'admin';
   profileImageUrl?: string;
   profileImagePublicId?: string;
@@ -52,6 +53,7 @@ const userSchema = new Schema<UserDocument>({
   email: { type: String, required: true, unique: true, lowercase: true, trim: true, index: true },
   passwordHash: { type: String, required: true, select: false },
   timezone: { type: String, required: true, default: 'UTC' },
+  dateOfBirth: { type: Date, index: true },
   role: { type: String, enum: ['learner', 'admin'], default: 'learner' },
   profileImageUrl: { type: String, trim: true },
   profileImagePublicId: { type: String, trim: true },
