@@ -1,5 +1,5 @@
 import cors from 'cors';
-import express from 'express';
+import express, { type NextFunction, type Request, type Response } from 'express';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import swaggerUi from 'swagger-ui-express';
@@ -41,7 +41,7 @@ app.use(morgan('combined'));
 app.get('/api-docs.json', (_req, res) => res.json(openApiDocument));
 app.use(
   '/api-docs',
-  (_req, res, next) => {
+  (_req: Request, res: Response, next: NextFunction) => {
     // Swagger UI ships inline bootstrapping code. Remove Helmet's CSP only for this
     // documentation route; all application/API routes keep the default CSP.
     res.removeHeader('Content-Security-Policy');
