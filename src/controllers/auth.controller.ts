@@ -2,6 +2,7 @@ import type { NextFunction, Request, Response } from 'express';
 import { z } from 'zod';
 import type { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import { authService } from '../services/auth.service.js';
+import { getSystemLimit, SYSTEM_LIMIT_KEYS } from '../services/system-limit.service.js';
 import { isValidTimeZone } from '../utils/timezone.js';
 
 const registerSchema = z.object({
@@ -32,6 +33,11 @@ const notificationPreferencesSchema = z.object({
   weeklyReviewEmails: z.boolean()
 });
 
+export async function registrationPolicy(_req: Request, res: Response, next: NextFunction) {
+  try {
+    res.json({ minimumAge: await getSystemLimit(SYSTEM_LIMIT_KEYS.ACCOUNT_MIN_REGISTRATION_AGE) });
+  } catch (error) { next(error); }
+}
 export async function register(req: Request, res: Response, next: NextFunction) {
   try { res.status(201).json(await authService.register(registerSchema.parse(req.body))); } catch (error) { next(error); }
 }
