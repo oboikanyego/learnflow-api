@@ -1,8 +1,9 @@
 import { env } from '../config/env.js';
 
 export type AiProvider = 'openai' | 'groq' | 'gemini';
+export type AiTextResult = { text: string; provider: AiProvider; model: string };
 
-type ProviderHttpError = Error & { statusCode?: number; exposeMessage?: boolean };
+type ProviderHttpError = Error & { statusCode?: number; exposeMessage?: boolean; retryable?: boolean };
 
 function selectedProvider(): AiProvider {
   if (env.AI_PROVIDER) return env.AI_PROVIDER;
@@ -35,6 +36,14 @@ function providerKeyName(provider: AiProvider): string {
   return 'GEMINI_API_KEY';
 }
 
+function providerOrder(): AiProvider[] {
+  const primary = selectedProvider();
+  const preferredFallbacks: AiProvider[] = ['openai', 'groq', 'gemini'];
+  return [primary, ...preferredFallbacks.filter(provider => provider !== primary)]
+    .filter((provider, index, values) => values.indexOf(provider) === index)
+    .filter(configured);
+}
+
 function extractProviderMessage(body: string): string {
   try {
     const parsed = JSON.parse(body) as { error?: { message?: string }; message?: string };
@@ -51,22 +60,26 @@ async function providerRequestError(provider: AiProvider, response: Response): P
   const detail = extractProviderMessage(await response.text());
   let message: string;
   let statusCode = 502;
+  let retryable = false;
 
   if (response.status === 401 || response.status === 403) {
     statusCode = 503;
     message = `${label} authentication failed. Check ${providerKeyName(provider)} on Render.`;
   } else if (response.status === 429) {
     statusCode = 503;
+    retryable = true;
     message = `${label} rate limit or account quota was reached. Check the provider quota/billing for the configured API key.`;
   } else if (response.status === 400 || response.status === 404) {
     message = `${label} rejected the configured AI request (${response.status})${detail ? `: ${detail}` : '.'}`;
   } else {
+    retryable = response.status >= 500;
     message = `${label} is temporarily unavailable (${response.status})${detail ? `: ${detail}` : '.'}`;
   }
 
   const error = new Error(message) as ProviderHttpError;
   error.statusCode = statusCode;
   error.exposeMessage = true;
+  error.retryable = retryable;
   return error;
 }
 
@@ -74,23 +87,11 @@ function emptyProviderResponseError(provider: AiProvider): ProviderHttpError {
   const error = new Error(`${providerLabel(provider)} returned an empty response. Try again or verify the configured model.`) as ProviderHttpError;
   error.statusCode = 502;
   error.exposeMessage = true;
+  error.retryable = true;
   return error;
 }
 
-export function getAiProviderInfo() {
-  const provider = selectedProvider();
-  return { provider, model: selectedModel(provider), configured: configured(provider) };
-}
-
-export async function generateAiText(prompt: string): Promise<string> {
-  const provider = selectedProvider();
-  if (!configured(provider)) {
-    const error = new Error(`AI provider ${provider} is not configured. Configure ${providerKeyName(provider)} on Render.`) as ProviderHttpError;
-    error.statusCode = 503;
-    error.exposeMessage = true;
-    throw error;
-  }
-
+async function requestProvider(provider: AiProvider, prompt: string): Promise<string> {
   if (provider === 'groq') {
     const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
@@ -138,4 +139,48 @@ export async function generateAiText(prompt: string): Promise<string> {
     }
   }
   throw emptyProviderResponseError(provider);
+}
+
+export function getAiProviderInfo() {
+  const provider = selectedProvider();
+  return {
+    provider,
+    model: selectedModel(provider),
+    configured: providerOrder().length > 0,
+    primaryConfigured: configured(provider),
+    fallbacks: providerOrder().filter(item => item !== provider)
+  };
+}
+
+export async function generateAiTextWithProvider(prompt: string): Promise<AiTextResult> {
+  const primary = selectedProvider();
+  const candidates = providerOrder();
+  if (!candidates.length) {
+    const error = new Error(`AI provider ${primary} is not configured. Configure ${providerKeyName(primary)} on Render.`) as ProviderHttpError;
+    error.statusCode = 503;
+    error.exposeMessage = true;
+    throw error;
+  }
+
+  let lastError: unknown;
+  for (let index = 0; index < candidates.length; index++) {
+    const provider = candidates[index]!;
+    try {
+      const text = await requestProvider(provider, prompt);
+      if (index > 0) console.warn(`[ai] Fallback provider ${provider} completed the request after ${candidates[0]} failed.`);
+      return { text, provider, model: selectedModel(provider) };
+    } catch (error) {
+      lastError = error;
+      const providerError = error as ProviderHttpError;
+      const hasFallback = index < candidates.length - 1;
+      if (!providerError.retryable || !hasFallback) throw error;
+      console.warn(`[ai] ${provider} temporarily unavailable; falling back to ${candidates[index + 1]}.`);
+    }
+  }
+
+  throw lastError;
+}
+
+export async function generateAiText(prompt: string): Promise<string> {
+  return (await generateAiTextWithProvider(prompt)).text;
 }
