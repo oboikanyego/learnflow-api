@@ -2,6 +2,10 @@ import { env } from '../config/env.js';
 
 export type AiProvider = 'openai' | 'groq' | 'gemini';
 export type AiTextResult = { text: string; provider: AiProvider; model: string };
+export type AiGenerationOptions = {
+  responseSchema?: Record<string, unknown>;
+  schemaName?: string;
+};
 
 type ProviderHttpError = Error & { statusCode?: number; exposeMessage?: boolean; retryable?: boolean };
 
@@ -38,7 +42,8 @@ function providerKeyName(provider: AiProvider): string {
 
 function providerOrder(): AiProvider[] {
   const primary = selectedProvider();
-  const preferredFallbacks: AiProvider[] = ['openai', 'groq', 'gemini'];
+  // Groq is LearnFlow's preferred secondary provider. OpenAI is optional only.
+  const preferredFallbacks: AiProvider[] = ['groq', 'openai', 'gemini'];
   return [primary, ...preferredFallbacks.filter(provider => provider !== primary)]
     .filter((provider, index, values) => values.indexOf(provider) === index)
     .filter(configured);
@@ -91,18 +96,28 @@ function emptyProviderResponseError(provider: AiProvider): ProviderHttpError {
   return error;
 }
 
-async function requestProvider(provider: AiProvider, prompt: string): Promise<string> {
+async function requestProvider(provider: AiProvider, prompt: string, options: AiGenerationOptions = {}): Promise<string> {
   if (provider === 'groq') {
     const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       headers: { Authorization: `Bearer ${env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: env.GROQ_MODEL,
-        temperature: 0.35,
+        temperature: options.responseSchema ? 0.1 : 0.35,
         messages: [
           { role: 'system', content: 'You are LearnFlow, a practical learning coach. Be concise, structured and action-oriented.' },
           { role: 'user', content: prompt }
-        ]
+        ],
+        ...(options.responseSchema ? {
+          response_format: {
+            type: 'json_schema',
+            json_schema: {
+              name: options.schemaName ?? 'learnflow_response',
+              strict: true,
+              schema: options.responseSchema
+            }
+          }
+        } : {})
       })
     });
     if (!response.ok) throw await providerRequestError(provider, response);
@@ -116,7 +131,19 @@ async function requestProvider(provider: AiProvider, prompt: string): Promise<st
     const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(env.GEMINI_MODEL)}:generateContent?key=${encodeURIComponent(env.GEMINI_API_KEY ?? '')}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        ...(options.responseSchema ? {
+          generationConfig: {
+            responseFormat: {
+              text: {
+                mimeType: 'application/json',
+                schema: options.responseSchema
+              }
+            }
+          }
+        } : {})
+      })
     });
     if (!response.ok) throw await providerRequestError(provider, response);
     const data = await response.json() as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
@@ -152,7 +179,7 @@ export function getAiProviderInfo() {
   };
 }
 
-export async function generateAiTextWithProvider(prompt: string): Promise<AiTextResult> {
+export async function generateAiTextWithProvider(prompt: string, options: AiGenerationOptions = {}): Promise<AiTextResult> {
   const primary = selectedProvider();
   const candidates = providerOrder();
   if (!candidates.length) {
@@ -166,7 +193,7 @@ export async function generateAiTextWithProvider(prompt: string): Promise<AiText
   for (let index = 0; index < candidates.length; index++) {
     const provider = candidates[index]!;
     try {
-      const text = await requestProvider(provider, prompt);
+      const text = await requestProvider(provider, prompt, options);
       if (index > 0) console.warn(`[ai] Fallback provider ${provider} completed the request after ${candidates[0]} failed.`);
       return { text, provider, model: selectedModel(provider) };
     } catch (error) {
@@ -181,6 +208,6 @@ export async function generateAiTextWithProvider(prompt: string): Promise<AiText
   throw lastError;
 }
 
-export async function generateAiText(prompt: string): Promise<string> {
-  return (await generateAiTextWithProvider(prompt)).text;
+export async function generateAiText(prompt: string, options: AiGenerationOptions = {}): Promise<string> {
+  return (await generateAiTextWithProvider(prompt, options)).text;
 }
