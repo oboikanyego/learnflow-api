@@ -135,12 +135,8 @@ async function requestProvider(provider: AiProvider, prompt: string, options: Ai
         contents: [{ parts: [{ text: prompt }] }],
         ...(options.responseSchema ? {
           generationConfig: {
-            responseFormat: {
-              text: {
-                mimeType: 'application/json',
-                schema: options.responseSchema
-              }
-            }
+            responseMimeType: 'application/json',
+            responseJsonSchema: options.responseSchema
           }
         } : {})
       })
