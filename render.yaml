@@ -21,6 +21,8 @@ services:
         sync: false
       - key: CLOUDINARY_URL
         sync: false
+      - key: YOUTUBE_API_KEY
+        sync: false
       - key: AI_QUEUE_CONCURRENCY
         value: 2
       - key: AI_PROVIDER
