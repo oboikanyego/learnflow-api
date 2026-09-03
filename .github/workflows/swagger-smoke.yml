@@ -7,22 +7,27 @@ on:
       - '.github/workflows/swagger-smoke.yml'
       - 'package.json'
       - 'src/app.ts'
-      - 'src/docs/openapi.ts'
+      - 'src/docs/**'
+      - 'src/controllers/auth.controller.ts'
+      - 'src/routes/auth.routes.ts'
+      - 'src/models/system-limit.model.ts'
+      - 'src/services/system-limit.service.ts'
   workflow_dispatch:
 
 jobs:
   verify-swagger:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 15
     env:
       API_URL: https://learnflow-api-njgz.onrender.com
     steps:
-      - name: Wait for OpenAPI JSON and validate spec
+      - name: Wait for current OpenAPI JSON and registration policy
         shell: bash
         run: |
           set -euo pipefail
 
-          for attempt in $(seq 1 40); do
+          ready=false
+          for attempt in $(seq 1 48); do
             status=$(curl --silent --show-error \
               --connect-timeout 10 \
               --max-time 30 \
@@ -31,28 +36,32 @@ jobs:
               "${API_URL}/api-docs.json" || true)
 
             if [ "$status" = "200" ]; then
-              jq -e '.openapi == "3.1.0"' openapi.json >/dev/null
-              jq -e '.info.title == "LearnFlow API"' openapi.json >/dev/null
-              jq -e '.components.securitySchemes.bearerAuth.scheme == "bearer"' openapi.json >/dev/null
-              jq -e '.paths["/api/v1/auth/login"].post' openapi.json >/dev/null
-              jq -e '.paths["/api/v1/ai/generate-plan/background"].post' openapi.json >/dev/null
-              echo 'OpenAPI JSON is deployed and valid.'
-              break
+              if jq -e '.openapi == "3.1.0" and .info.title == "LearnFlow API" and .components.securitySchemes.bearerAuth.scheme == "bearer" and .paths["/api/v1/auth/registration-policy"].get and .paths["/api/v1/admin/system-limits"].get and .paths["/api/v1/admin/system-limits/{key}"].patch and .paths["/api/v1/videos/search"].post' openapi.json >/dev/null 2>&1; then
+                policy_status=$(curl --silent --show-error \
+                  --connect-timeout 10 \
+                  --max-time 30 \
+                  -o registration-policy.json \
+                  -w '%{http_code}' \
+                  "${API_URL}/api/v1/auth/registration-policy" || true)
+
+                if [ "$policy_status" = "200" ] && jq -e '.minimumAge | type == "number" and . >= 13' registration-policy.json >/dev/null 2>&1; then
+                  echo 'Current OpenAPI contract and database-backed registration policy are deployed.'
+                  ready=true
+                  break
+                fi
+              fi
             fi
 
-            if [ "$status" = "404" ] || [ "$status" = "502" ] || [ "$status" = "503" ] || [ "$status" = "000" ]; then
-              echo "Swagger spec not ready (HTTP ${status}); retry ${attempt}/40"
-              sleep 15
-              continue
-            fi
-
-            echo "Unexpected OpenAPI response: HTTP ${status}"
-            if [ -f openapi.json ]; then cat openapi.json; fi
-            exit 1
+            echo "Latest runtime policy not ready yet; retry ${attempt}/48"
+            sleep 15
           done
 
-          test -f openapi.json
-          jq -e '.openapi == "3.1.0"' openapi.json >/dev/null
+          if [ "$ready" != "true" ]; then
+            echo 'Latest Swagger/runtime policy did not become available within the smoke window.'
+            if [ -f openapi.json ]; then jq '.paths | keys' openapi.json || true; fi
+            if [ -f registration-policy.json ]; then cat registration-policy.json || true; fi
+            exit 1
+          fi
 
       - name: Verify Swagger UI page
         shell: bash
