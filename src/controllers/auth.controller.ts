@@ -8,6 +8,7 @@ const registerSchema = z.object({
   name: z.string().trim().min(2).max(80),
   email: z.email(),
   password: z.string().min(8).max(128),
+  dateOfBirth: z.coerce.date(),
   timezone: z.string().refine(isValidTimeZone, 'Invalid IANA timezone').default('UTC')
 });
 const loginSchema = z.object({ email: z.email(), password: z.string().min(8).max(128) });
@@ -15,7 +16,8 @@ const forgotPasswordSchema = z.object({ email: z.email() });
 const resetPasswordSchema = z.object({ token: z.string().min(32), password: z.string().min(8).max(128) });
 const profileSchema = z.object({
   name: z.string().trim().min(2).max(80),
-  timezone: z.string().refine(isValidTimeZone, 'Invalid IANA timezone')
+  timezone: z.string().refine(isValidTimeZone, 'Invalid IANA timezone'),
+  dateOfBirth: z.coerce.date().optional()
 });
 const changePasswordSchema = z.object({
   currentPassword: z.string().min(8).max(128),
