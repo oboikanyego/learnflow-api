@@ -5,46 +5,23 @@ export const lessonVideoOpenApiPaths = {
       summary: 'Search the current user’s lessons',
       description: 'Returns up to 20 matching lessons from the signed-in learner’s own curriculum, including any saved lesson resource URL. This does not call YouTube.',
       security: [{ bearerAuth: [] }],
-      parameters: [
-        {
-          name: 'q',
-          in: 'query',
-          required: false,
-          schema: { type: 'string', maxLength: 120 },
-          description: 'Optional lesson title/description search text.'
-        }
-      ],
-      responses: {
-        '200': { description: 'Matching lessons' },
-        '401': { description: 'Authentication required' }
-      }
+      parameters: [{ name: 'q', in: 'query', required: false, schema: { type: 'string', maxLength: 120 }, description: 'Optional lesson title/description search text.' }],
+      responses: { '200': { description: 'Matching lessons' }, '401': { description: 'Authentication required' } }
     }
   },
   '/api/v1/videos/search': {
     post: {
       tags: ['Lesson Videos'],
-      summary: 'Find and verify YouTube videos for a lesson with AI assistance',
-      description: 'AI creates a focused YouTube query, then LearnFlow verifies returned video IDs with videos.list before exposing them. Non-embeddable results are removed. Responses include duration, caption availability, Made for Kids state, publication metadata and privacy-enhanced youtube-nocookie.com embed URLs. Identical searches are cached in Redis for six hours and cache misses are protected by per-user and global search limits.',
+      summary: 'Find and verify age-appropriate YouTube videos for a lesson',
+      description: 'AI creates a focused YouTube query, then LearnFlow verifies returned video IDs with videos.list. Non-embeddable results are removed. Learners below the database-managed minor threshold use YouTube safeSearch=strict and videos marked ytAgeRestricted are excluded. Existing accounts without a date of birth are treated conservatively the same way until DOB is added. Search limits are read from MongoDB and cache misses are counted through Redis.',
       security: [{ bearerAuth: [] }],
       requestBody: {
         required: true,
-        content: {
-          'application/json': {
-            schema: {
-              type: 'object',
-              additionalProperties: false,
-              required: ['lessonId'],
-              properties: {
-                lessonId: { type: 'string' },
-                query: { type: 'string', maxLength: 120, example: 'beginner explanation with Angular examples' }
-              }
-            }
-          }
-        }
+        content: { 'application/json': { schema: { type: 'object', additionalProperties: false, required: ['lessonId'], properties: { lessonId: { type: 'string' }, query: { type: 'string', maxLength: 120, example: 'beginner explanation with Angular examples' } } } } }
       },
       responses: {
         '200': {
-          description: 'Verified AI-assisted YouTube results',
+          description: 'Verified, age-aware AI-assisted YouTube results',
           content: {
             'application/json': {
               schema: {
@@ -55,11 +32,19 @@ export const lessonVideoOpenApiPaths = {
                   searchQuery: { type: 'string' },
                   aiEnhanced: { type: 'boolean' },
                   provider: { type: ['string', 'null'] },
+                  audience: {
+                    type: 'object',
+                    properties: {
+                      profile: { type: 'string', enum: ['ADULT', 'MINOR', 'UNKNOWN'] },
+                      safeSearch: { type: 'string', enum: ['moderate', 'strict'] },
+                      ageRestrictedBlocked: { type: 'boolean' }
+                    }
+                  },
                   videos: {
                     type: 'array',
                     items: {
                       type: 'object',
-                      required: ['videoId', 'title', 'watchUrl', 'embedUrl', 'durationSeconds', 'durationLabel', 'hasCaptions', 'madeForKids', 'trackingDisabled', 'embeddable'],
+                      required: ['videoId', 'title', 'watchUrl', 'embedUrl', 'durationSeconds', 'durationLabel', 'hasCaptions', 'madeForKids', 'ageRestricted', 'trackingDisabled', 'embeddable'],
                       properties: {
                         videoId: { type: 'string', example: 'dQw4w9WgXcQ' },
                         title: { type: 'string' },
@@ -74,6 +59,7 @@ export const lessonVideoOpenApiPaths = {
                         durationLabel: { type: 'string', example: '18:42' },
                         hasCaptions: { type: 'boolean' },
                         madeForKids: { type: 'boolean' },
+                        ageRestricted: { type: 'boolean', description: 'True when YouTube reports contentDetails.contentRating.ytRating as ytAgeRestricted.' },
                         trackingDisabled: { type: 'boolean', description: 'True for Made for Kids content. LearnFlow does not collect player analytics for these videos.' },
                         embeddable: { type: 'boolean', const: true },
                         privacyStatus: { type: 'string' }
@@ -87,7 +73,7 @@ export const lessonVideoOpenApiPaths = {
         },
         '401': { description: 'Authentication required' },
         '404': { description: 'Lesson not found' },
-        '429': { description: 'LearnFlow or YouTube search allowance reached. Response can include quota and resetsAt.' },
+        '429': { description: 'Database-managed LearnFlow or provider search allowance reached. Response can include quota and resetsAt.' },
         '503': { description: 'YouTube API key is not configured' }
       }
     }
@@ -98,28 +84,8 @@ export const lessonVideoOpenApiPaths = {
       summary: 'Save a YouTube video as the lesson resource',
       description: 'Stores the selected YouTube watch URL in the owned lesson resourceUrl and invalidates the relevant Redis learning caches.',
       security: [{ bearerAuth: [] }],
-      requestBody: {
-        required: true,
-        content: {
-          'application/json': {
-            schema: {
-              type: 'object',
-              additionalProperties: false,
-              required: ['lessonId', 'videoId'],
-              properties: {
-                lessonId: { type: 'string' },
-                videoId: { type: 'string', pattern: '^[A-Za-z0-9_-]{11}$' }
-              }
-            }
-          }
-        }
-      },
-      responses: {
-        '200': { description: 'Video saved as the lesson resource' },
-        '400': { description: 'Invalid YouTube video id' },
-        '401': { description: 'Authentication required' },
-        '404': { description: 'Lesson not found' }
-      }
+      requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', additionalProperties: false, required: ['lessonId', 'videoId'], properties: { lessonId: { type: 'string' }, videoId: { type: 'string', pattern: '^[A-Za-z0-9_-]{11}$' } } } } } },
+      responses: { '200': { description: 'Video saved as the lesson resource' }, '400': { description: 'Invalid YouTube video id' }, '401': { description: 'Authentication required' }, '404': { description: 'Lesson not found' } }
     }
   }
 } as const;
