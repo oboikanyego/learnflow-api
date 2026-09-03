@@ -1,3 +1,4 @@
+import { Types } from 'mongoose';
 import { SystemLimitModel, type SystemLimitCategory } from '../models/system-limit.model.js';
 
 export const SYSTEM_LIMIT_KEYS = {
@@ -92,7 +93,7 @@ export async function updateSystemLimit(key: string, value: number, updatedBy: s
     throw Object.assign(new Error(`Value must be an integer between ${current.minValue} and ${current.maxValue}.`), { statusCode: 400 });
   }
   current.value = value;
-  current.updatedBy = updatedBy as never;
+  current.updatedBy = new Types.ObjectId(updatedBy) as unknown as typeof current.updatedBy;
   await current.save();
   clearSystemLimitCache();
   return current.toObject();
