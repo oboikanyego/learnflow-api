@@ -5,6 +5,7 @@ import { NotificationModel } from '../models/notification.model.js';
 import { UserModel } from '../models/user.model.js';
 import { brandedEmail } from './email-template.service.js';
 import { emailService } from './email.service.js';
+import { invalidateLearningCache } from './redis.service.js';
 
 const MINUTE = 60_000;
 const MAX_EMAIL_ATTEMPTS = 3;
@@ -113,6 +114,7 @@ export class ReminderWorkerService {
         if (end >= now) continue;
 
         lesson.status = 'MISSED'; lesson.missedAt = now; await lesson.save();
+        await invalidateLearningCache(String(lesson.ownerId), { learningPathId: String(lesson.learningPathId), lessonId: String(lesson._id), invalidatePathList: false });
         const key = eventKey('MISSED', lesson._id, lesson.scheduledAt!);
         const title = 'A learning session needs your attention';
         const message = `${lesson.title} was not completed. Open LearnFlow to reschedule it when it works for you.`;
