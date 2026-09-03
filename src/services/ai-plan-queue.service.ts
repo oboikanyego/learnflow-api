@@ -1,7 +1,8 @@
 import { Queue, Worker, type Job } from 'bullmq';
-import IORedis from 'ioredis';
+import type IORedis from 'ioredis';
 import { env } from '../config/env.js';
 import { markAiPlanJobPermanentlyFailed, processAiPlanJob, type PlanInput } from './ai-plan-processor.service.js';
+import { createRedisConnection, redisConfigured } from './redis.service.js';
 
 const QUEUE_NAME = 'learnflow-ai-plan-generation';
 
@@ -18,11 +19,9 @@ let workerConnection: IORedis | undefined;
 let queue: Queue<AiPlanQueueData> | undefined;
 let worker: Worker<AiPlanQueueData> | undefined;
 
-function redisConfigured(): boolean { return Boolean(env.REDIS_URL); }
-
 function getQueue(): Queue<AiPlanQueueData> {
-  if (!env.REDIS_URL) throw Object.assign(new Error('Background job queue is not configured. Set REDIS_URL on the API service.'), { statusCode: 503 });
-  if (!producerConnection) producerConnection = new IORedis(env.REDIS_URL, { maxRetriesPerRequest: 1, enableReadyCheck: true });
+  if (!redisConfigured()) throw Object.assign(new Error('Background job queue is not configured. Set REDIS_URL on the API service.'), { statusCode: 503 });
+  if (!producerConnection) producerConnection = createRedisConnection({ maxRetriesPerRequest: 1 });
   if (!queue) {
     queue = new Queue<AiPlanQueueData>(QUEUE_NAME, {
       connection: producerConnection,
@@ -43,7 +42,7 @@ export async function enqueueAiPlanJob(data: AiPlanQueueData): Promise<void> {
 
 export function startAiPlanWorker(): void {
   if (!redisConfigured() || worker) return;
-  workerConnection = new IORedis(env.REDIS_URL!, { maxRetriesPerRequest: null, enableReadyCheck: true });
+  workerConnection = createRedisConnection({ maxRetriesPerRequest: null });
   worker = new Worker<AiPlanQueueData>(QUEUE_NAME, async (job: Job<AiPlanQueueData>) => {
     const { appJobId, ownerId, timezone, input, usageId } = job.data;
     await processAiPlanJob(appJobId, ownerId, timezone, input, usageId);
