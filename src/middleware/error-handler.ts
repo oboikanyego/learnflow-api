@@ -1,4 +1,5 @@
 import type { ErrorRequestHandler } from 'express';
+import multer from 'multer';
 import { ZodError } from 'zod';
 
 interface HttpError extends Error {
@@ -11,6 +12,15 @@ interface HttpError extends Error {
 export const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
   if (error instanceof ZodError) {
     res.status(400).json({ message: 'Validation failed', errors: error.flatten() });
+    return;
+  }
+
+  if (error instanceof multer.MulterError) {
+    const status = error.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
+    const message = error.code === 'LIMIT_FILE_SIZE'
+      ? 'The uploaded file is too large. Profile pictures must be 5 MB or smaller.'
+      : error.message;
+    res.status(status).json({ message });
     return;
   }
 
