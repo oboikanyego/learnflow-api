@@ -5,6 +5,7 @@ import morgan from 'morgan';
 import swaggerUi from 'swagger-ui-express';
 import { env } from './config/env.js';
 import { openApiDocument } from './docs/openapi.js';
+import { runtimePolicyOpenApiPaths } from './docs/runtime-policy-openapi.js';
 import { lessonVideoOpenApiPaths } from './docs/video-openapi.js';
 import { errorHandler } from './middleware/error-handler.js';
 import { adminRouter } from './routes/admin.routes.js';
@@ -34,8 +35,8 @@ import { pingRedis } from './services/redis.service.js';
 
 const apiDocsDocument = {
   ...openApiDocument,
-  tags: [...openApiDocument.tags, { name: 'Lesson Videos', description: 'AI-assisted YouTube discovery for LearnFlow lessons' }],
-  paths: { ...openApiDocument.paths, ...lessonVideoOpenApiPaths }
+  tags: [...openApiDocument.tags, { name: 'Lesson Videos', description: 'AI-assisted, age-aware YouTube discovery for LearnFlow lessons' }],
+  paths: { ...openApiDocument.paths, ...lessonVideoOpenApiPaths, ...runtimePolicyOpenApiPaths }
 };
 
 export const app = express();
@@ -50,8 +51,6 @@ app.get('/api-docs.json', (_req, res) => res.json(apiDocsDocument));
 app.use(
   '/api-docs',
   (_req: Request, res: Response, next: NextFunction) => {
-    // Swagger UI ships inline bootstrapping code. Remove Helmet's CSP only for this
-    // documentation route; all application/API routes keep the default CSP.
     res.removeHeader('Content-Security-Policy');
     next();
   },
