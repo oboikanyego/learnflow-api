@@ -10,6 +10,7 @@ import { localDateTimeToUtc } from '../utils/timezone.js';
 import { generateAiTextWithProvider, type AiProvider } from './ai-provider.service.js';
 import { completeAiUsage } from './ai-usage.service.js';
 import { sendPlanCreatedEmail } from './learning-email.service.js';
+import { invalidateLearningCache } from './redis.service.js';
 
 export const planRequestSchema = z.object({
   topic: z.string().min(2).max(120),
@@ -140,6 +141,7 @@ export async function persistGeneratedPlan(ownerId: string, timezone: string, ra
       }
     }
   }
+  await invalidateLearningCache(ownerId, { learningPathId: path.id });
   return { learningPathId: path._id, learningPathIdString: path.id, lessonCount };
 }
 
