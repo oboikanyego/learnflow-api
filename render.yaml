@@ -21,10 +21,16 @@ services:
         sync: false
       - key: AI_QUEUE_CONCURRENCY
         value: 2
-      - key: OPENAI_API_KEY
+      - key: AI_PROVIDER
+        value: gemini
+      - key: GEMINI_API_KEY
         sync: false
-      - key: OPENAI_MODEL
-        value: gpt-5.6-luna
+      - key: GEMINI_MODEL
+        value: gemini-3.7-flash
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: openai/gpt-oss-20b
       - key: RESEND_API_KEY
         sync: false
       - key: EMAIL_FROM
