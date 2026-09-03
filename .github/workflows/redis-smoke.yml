@@ -1,0 +1,59 @@
+name: Deployed Redis Smoke Test
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/redis-smoke.yml'
+      - 'src/app.ts'
+      - 'src/services/redis.service.ts'
+      - 'src/services/ai-plan-queue.service.ts'
+  workflow_dispatch:
+
+jobs:
+  verify-redis:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      API_URL: https://learnflow-api-njgz.onrender.com
+    steps:
+      - name: Wait for Redis health endpoint and assert connection
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          for attempt in $(seq 1 40); do
+            status=$(curl --silent --show-error \
+              --connect-timeout 10 \
+              --max-time 30 \
+              -o redis-health.json \
+              -w '%{http_code}' \
+              "${API_URL}/health/redis" || true)
+
+            if [ "$status" = "200" ]; then
+              cat redis-health.json
+              redis_status=$(jq -r '.status // empty' redis-health.json)
+              configured=$(jq -r '.configured // false' redis-health.json)
+              latency=$(jq -r '.latencyMs // empty' redis-health.json)
+
+              test "$redis_status" = 'UP'
+              test "$configured" = 'true'
+              test -n "$latency"
+              echo "Redis connection verified. PING latency: ${latency}ms"
+              exit 0
+            fi
+
+            if [ "$status" = "404" ] || [ "$status" = "502" ] || [ "$status" = "503" ] || [ "$status" = "000" ]; then
+              echo "Redis health endpoint not ready (HTTP ${status}); retry ${attempt}/40"
+              if [ -f redis-health.json ]; then cat redis-health.json; fi
+              sleep 15
+              continue
+            fi
+
+            echo "Unexpected Redis health response: HTTP ${status}"
+            if [ -f redis-health.json ]; then cat redis-health.json; fi
+            exit 1
+          done
+
+          echo 'Timed out waiting for a healthy deployed Redis connection.'
+          exit 1
