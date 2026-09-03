@@ -3,6 +3,7 @@ import { Types } from 'mongoose';
 import { z } from 'zod';
 import type { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import { LessonModel } from '../models/lesson.model.js';
+import { invalidateLearningCache } from '../services/redis.service.js';
 
 const DAY = 86_400_000;
 const idSchema = z.string().refine(Types.ObjectId.isValid, 'Invalid id');
@@ -32,7 +33,9 @@ export async function completeReview(req: AuthenticatedRequest, res: Response, n
     const lesson = await LessonModel.findOne({ _id: lessonId, ownerId, status: 'COMPLETED' });
     if (!lesson) return res.status(404).json({ message: 'Completed lesson not found' });
     const now = new Date(); const nextStage = input.confidenceScore <= 2 ? 0 : Math.min(10, (lesson.reviewStage ?? 0) + 1);
-    lesson.confidenceScore = input.confidenceScore; lesson.reviewStage = nextStage; lesson.lastReviewedAt = now; lesson.reviewCount = (lesson.reviewCount ?? 0) + 1; lesson.nextReviewAt = nextReviewDate(nextStage, input.confidenceScore, now); await lesson.save(); res.json(lesson);
+    lesson.confidenceScore = input.confidenceScore; lesson.reviewStage = nextStage; lesson.lastReviewedAt = now; lesson.reviewCount = (lesson.reviewCount ?? 0) + 1; lesson.nextReviewAt = nextReviewDate(nextStage, input.confidenceScore, now); await lesson.save();
+    await invalidateLearningCache(ownerId, { learningPathId: String(lesson.learningPathId), lessonId, invalidatePathList: false, invalidateAnalytics: false });
+    res.json(lesson);
   } catch (error) { next(error); }
 }
 
