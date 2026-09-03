@@ -10,6 +10,7 @@ const schema = z.object({
   JWT_EXPIRES_IN: z.string().default('7d'),
   REDIS_URL: z.string().url().optional(),
   CLOUDINARY_URL: z.string().min(1).optional(),
+  YOUTUBE_API_KEY: z.string().min(1).optional(),
   AI_QUEUE_CONCURRENCY: z.coerce.number().int().min(1).max(10).default(2),
   AI_PROVIDER: z.enum(['openai', 'groq', 'gemini']).optional(),
   OPENAI_API_KEY: z.string().optional(),
