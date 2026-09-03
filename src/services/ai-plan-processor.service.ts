@@ -7,7 +7,7 @@ import { NotificationModel } from '../models/notification.model.js';
 import { PhaseModel } from '../models/phase.model.js';
 import { UserModel } from '../models/user.model.js';
 import { localDateTimeToUtc } from '../utils/timezone.js';
-import { generateAiText } from './ai-provider.service.js';
+import { generateAiTextWithProvider, type AiProvider } from './ai-provider.service.js';
 import { completeAiUsage } from './ai-usage.service.js';
 import { sendPlanCreatedEmail } from './learning-email.service.js';
 
@@ -94,8 +94,22 @@ const PLAN_RESPONSE_SCHEMA: Record<string, unknown> = {
   }
 };
 
+const PLAN_GENERATION_CHUNK_WEEKS = 8;
+const GROQ_CHUNK_DELAY_MS = 30_000;
+
 export type PlanInput = z.infer<typeof planRequestSchema>;
 type GeneratedPlan = z.infer<typeof generatedPlanSchema>;
+type PlanSegment = {
+  weekStart: number;
+  weekEnd: number;
+  totalWeeks: number;
+  priorContext?: string;
+};
+
+type GeneratedSegment = {
+  plan: GeneratedPlan;
+  provider: AiProvider;
+};
 
 export async function getUserTimezone(userId: string): Promise<string> {
   const user = await UserModel.findById(userId).select('timezone').lean();
@@ -129,8 +143,27 @@ export async function persistGeneratedPlan(ownerId: string, timezone: string, ra
   return { learningPathId: path._id, learningPathIdString: path.id, lessonCount };
 }
 
-function buildPlanPrompt(input: PlanInput, timezone: string): string {
-  return `Create a practical learning plan for ${input.topic}. Duration: ${input.weeks} weeks. Study days: ${input.days.join(', ')}. Start date: ${input.startDate}. Study time: ${input.time} in timezone ${timezone}. Session duration: ${input.durationMinutes} minutes. Schedule lessons only on the requested study days, beginning on or after the requested start date. Keep lessons realistic, progressive and ordered. For resourceUrl use an empty string when no reliable URL is known. Return only the requested structured learning-plan data.`;
+function addWeeks(dateText: string, weeks: number): string {
+  const date = new Date(`${dateText}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + weeks * 7);
+  return date.toISOString().slice(0, 10);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function buildPlanPrompt(input: PlanInput, timezone: string, segment?: PlanSegment): string {
+  const segmentWeeks = segment ? segment.weekEnd - segment.weekStart + 1 : input.weeks;
+  const expectedLessons = segmentWeeks * input.days.length;
+  const segmentText = segment
+    ? `This request is only for weeks ${segment.weekStart}-${segment.weekEnd} of a ${segment.totalWeeks}-week curriculum. Continue the curriculum rather than restarting beginner material.`
+    : `This request covers the full ${input.weeks}-week curriculum.`;
+  const continuity = segment?.priorContext
+    ? `Avoid repeating these recently covered items: ${segment.priorContext}.`
+    : '';
+
+  return `Create a practical learning plan for ${input.topic}. ${segmentText} Study days: ${input.days.join(', ')}. Segment start date: ${input.startDate}. Study time: ${input.time} in timezone ${timezone}. Session duration: ${input.durationMinutes} minutes. Generate exactly ${expectedLessons} lessons total: one lesson for each requested study day in every 7-day study week. Schedule lessons only on the requested study days, beginning on or after the segment start date. Keep the curriculum realistic, progressive and ordered. Keep each lesson description to one concise sentence. Organize lessons into sensible phases and modules. ${continuity} For resourceUrl use an empty string when no reliable URL is known. Return JSON only, matching the requested structured learning-plan schema.`;
 }
 
 function extractJsonText(text: string): string {
@@ -151,21 +184,34 @@ function parseErrorMessage(error: unknown): string {
   return 'unknown JSON parsing error';
 }
 
-function buildRepairPrompt(input: PlanInput, timezone: string, brokenOutput: string, parseError: unknown): string {
-  return `Repair the following generated learning plan. The previous output could not be parsed or did not match the required schema. Preserve the intended learning content, but return a complete corrected plan. Do not explain the correction.\n\nOriginal request:\n${buildPlanPrompt(input, timezone)}\n\nValidation problem:\n${parseErrorMessage(parseError)}\n\nBroken output:\n${brokenOutput.slice(0, 12_000)}`;
+function buildRepairPrompt(input: PlanInput, timezone: string, brokenOutput: string, parseError: unknown, segment?: PlanSegment): string {
+  return `Repair the following generated learning plan. The previous output could not be parsed or did not match the required schema. Preserve the intended learning content, but return a complete corrected plan. Do not explain the correction.\n\nOriginal request:\n${buildPlanPrompt(input, timezone, segment)}\n\nValidation problem:\n${parseErrorMessage(parseError)}\n\nBroken output:\n${brokenOutput.slice(0, 12_000)}`;
 }
 
-export async function createGeneratedPlan(input: PlanInput, timezone: string) {
+function continuationContext(plan: GeneratedPlan): string {
+  const phaseTitles = plan.phases.slice(-2).map(phase => phase.title);
+  const lessonTitles = plan.phases
+    .flatMap(phase => phase.modules)
+    .flatMap(module => module.lessons)
+    .slice(-8)
+    .map(lesson => lesson.title);
+  return [...phaseTitles, ...lessonTitles].join(' | ').slice(0, 1_200);
+}
+
+async function generatePlanSegment(input: PlanInput, timezone: string, segment?: PlanSegment): Promise<GeneratedSegment> {
   const generationOptions = { responseSchema: PLAN_RESPONSE_SCHEMA, schemaName: 'learnflow_learning_plan' };
-  const firstText = await generateAiText(buildPlanPrompt(input, timezone), generationOptions);
+  const firstResult = await generateAiTextWithProvider(buildPlanPrompt(input, timezone, segment), generationOptions);
 
   try {
-    return parseGeneratedPlanText(firstText);
+    return { plan: parseGeneratedPlanText(firstResult.text), provider: firstResult.provider };
   } catch (firstError) {
     console.warn(`[ai-plan] Structured plan response was invalid; attempting one repair generation: ${parseErrorMessage(firstError)}`);
-    const repairedText = await generateAiText(buildRepairPrompt(input, timezone, firstText, firstError), generationOptions);
+    const repairedResult = await generateAiTextWithProvider(
+      buildRepairPrompt(input, timezone, firstResult.text, firstError, segment),
+      generationOptions
+    );
     try {
-      return parseGeneratedPlanText(repairedText);
+      return { plan: parseGeneratedPlanText(repairedResult.text), provider: repairedResult.provider };
     } catch (repairError) {
       const error = Object.assign(
         new Error(`AI returned invalid learning-plan JSON after a structured retry: ${parseErrorMessage(repairError)}`),
@@ -174,6 +220,47 @@ export async function createGeneratedPlan(input: PlanInput, timezone: string) {
       throw error;
     }
   }
+}
+
+function mergePlanSegments(segments: GeneratedPlan[]): GeneratedPlan {
+  const first = segments[0];
+  if (!first) throw Object.assign(new Error('AI did not generate any learning-plan segments.'), { statusCode: 502, exposeMessage: true });
+
+  return generatedPlanSchema.parse({
+    learningPath: first.learningPath,
+    phases: segments.flatMap(segment => segment.phases)
+  });
+}
+
+export async function createGeneratedPlan(input: PlanInput, timezone: string) {
+  if (input.weeks <= PLAN_GENERATION_CHUNK_WEEKS) {
+    return (await generatePlanSegment(input, timezone)).plan;
+  }
+
+  const segments: GeneratedPlan[] = [];
+  let priorContext: string | undefined;
+
+  for (let weekStart = 1; weekStart <= input.weeks; weekStart += PLAN_GENERATION_CHUNK_WEEKS) {
+    const weekEnd = Math.min(input.weeks, weekStart + PLAN_GENERATION_CHUNK_WEEKS - 1);
+    const segmentInput: PlanInput = {
+      ...input,
+      weeks: weekEnd - weekStart + 1,
+      startDate: addWeeks(input.startDate, weekStart - 1)
+    };
+    const segment: PlanSegment = { weekStart, weekEnd, totalWeeks: input.weeks, priorContext };
+
+    console.log(`[ai-plan] Generating weeks ${weekStart}-${weekEnd} of ${input.weeks}.`);
+    const generated = await generatePlanSegment(segmentInput, timezone, segment);
+    segments.push(generated.plan);
+    priorContext = continuationContext(generated.plan);
+
+    if (generated.provider === 'groq' && weekEnd < input.weeks) {
+      console.log('[ai-plan] Pacing Groq fallback before the next plan segment to stay within free-tier token limits.');
+      await sleep(GROQ_CHUNK_DELAY_MS);
+    }
+  }
+
+  return mergePlanSegments(segments);
 }
 
 export async function processAiPlanJob(jobId: string, ownerId: string, timezone: string, input: PlanInput, usageId?: string): Promise<void> {
