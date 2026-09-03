@@ -2,7 +2,9 @@ import cors from 'cors';
 import express from 'express';
 import helmet from 'helmet';
 import morgan from 'morgan';
+import swaggerUi from 'swagger-ui-express';
 import { env } from './config/env.js';
+import { openApiDocument } from './docs/openapi.js';
 import { errorHandler } from './middleware/error-handler.js';
 import { adminRouter } from './routes/admin.routes.js';
 import { aiRouter } from './routes/ai.routes.js';
@@ -35,6 +37,29 @@ app.use(helmet());
 app.use(cors({ origin: env.CLIENT_ORIGIN }));
 app.use(express.json({ limit: '1mb' }));
 app.use(morgan('combined'));
+
+app.get('/api-docs.json', (_req, res) => res.json(openApiDocument));
+app.use(
+  '/api-docs',
+  (_req, res, next) => {
+    // Swagger UI ships inline bootstrapping code. Remove Helmet's CSP only for this
+    // documentation route; all application/API routes keep the default CSP.
+    res.removeHeader('Content-Security-Policy');
+    next();
+  },
+  swaggerUi.serve,
+  swaggerUi.setup(openApiDocument, {
+    customSiteTitle: 'LearnFlow API Docs',
+    customCss: '.swagger-ui .topbar { display: none } .swagger-ui .info { margin: 32px 0 }',
+    swaggerOptions: {
+      persistAuthorization: true,
+      displayRequestDuration: true,
+      filter: true,
+      docExpansion: 'list',
+      tryItOutEnabled: true
+    }
+  })
+);
 
 app.get('/health', (_req, res) => res.json({ status: 'ok', service: 'learnflow-api' }));
 app.get('/health/redis', async (_req, res) => {
