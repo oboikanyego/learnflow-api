@@ -16,8 +16,8 @@ interface CreateUserMessageInput {
 
 function notificationTitle(type: UserMessageType): string {
   if (type === 'SUPPORT') return 'New support request';
-  if (type === 'FEEDBACK') return 'New LearnFlow feedback';
-  return 'New contact message';
+  if (type === 'FEEDBACK') return 'New feedback request';
+  return 'New contact request';
 }
 
 export async function createUserMessage(input: CreateUserMessageInput) {
@@ -31,12 +31,12 @@ export async function createUserMessage(input: CreateUserMessageInput) {
     ...(input.rating ? { rating: input.rating } : {}),
     ...(input.category ? { category: input.category } : {}),
     notificationStatus: 'SKIPPED',
-    notificationError: 'Email delivery is disabled during phase one testing.'
+    notificationError: 'Outbound communications are disabled for Contact, Feedback and Support during the pre-revenue testing phase.'
   });
 
   const admins = await UserModel.find({ role: 'admin' }).select('_id').lean();
   if (!admins.length) {
-    record.notificationError = 'Email delivery is disabled during phase one testing. No administrator account is configured for in-app notification.';
+    record.notificationError = 'Outbound communications are disabled for Contact, Feedback and Support during the pre-revenue testing phase. No administrator account is configured for in-app notification.';
     await record.save();
     return record.toObject();
   }
@@ -46,7 +46,7 @@ export async function createUserMessage(input: CreateUserMessageInput) {
     type: 'SYSTEM',
     title: notificationTitle(input.type),
     message: `${input.name}: ${input.subject}`.slice(0, 240),
-    actionUrl: input.type === 'SUPPORT' ? '/admin/support-requests' : '/notifications'
+    actionUrl: '/admin/support-requests'
   })));
 
   record.notifiedAdminCount = admins.length;
