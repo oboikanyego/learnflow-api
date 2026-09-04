@@ -1,4 +1,5 @@
 import { Types } from 'mongoose';
+import { NotificationModel } from '../models/notification.model.js';
 import { UserMessageModel, type UserMessageType } from '../models/user-message.model.js';
 import { UserModel } from '../models/user.model.js';
 import { emailService } from './email.service.js';
@@ -28,6 +29,12 @@ function buildAdminEmail(input: CreateUserMessageInput): { subject: string; text
   return { subject: `[LearnFlow ${input.type}] ${input.subject}`, text: lines.join('\n') };
 }
 
+function notificationTitle(type: UserMessageType): string {
+  if (type === 'SUPPORT') return 'New support request';
+  if (type === 'FEEDBACK') return 'New LearnFlow feedback';
+  return 'New contact message';
+}
+
 export async function createUserMessage(input: CreateUserMessageInput) {
   const record = await UserMessageModel.create({
     type: input.type,
@@ -40,13 +47,20 @@ export async function createUserMessage(input: CreateUserMessageInput) {
     ...(input.category ? { category: input.category } : {})
   });
 
-  const admins = await UserModel.find({ role: 'admin' }).select('email').lean();
+  const admins = await UserModel.find({ role: 'admin' }).select('_id email').lean();
   if (!admins.length) {
     record.notificationStatus = 'SKIPPED';
-    record.notificationError = 'No administrator email account is configured.';
+    record.notificationError = 'No administrator account is configured.';
     await record.save();
     return record.toObject();
   }
+
+  await NotificationModel.insertMany(admins.map(admin => ({
+    ownerId: admin._id,
+    type: 'SYSTEM',
+    title: notificationTitle(input.type),
+    message: `${input.name}: ${input.subject}`.slice(0, 240)
+  })));
 
   const email = buildAdminEmail(input);
   const results = await Promise.all(admins.map(admin => emailService.send({ to: admin.email, ...email })));
