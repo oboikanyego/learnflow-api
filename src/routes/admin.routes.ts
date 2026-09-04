@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { getAdminEntitlementHistory, getAdminOverview, listAdminUsers, updateAdminEntitlement } from '../controllers/admin.controller.js';
 import { getAdminBillingEvents, getAdminBillingSettings, getAdminBillingSettingsAudit, getAdminSubscriptionOperations, patchAdminBillingSettings } from '../controllers/billing-settings.controller.js';
 import { getSystemHealth } from '../controllers/system-health.controller.js';
-import { getSystemLimits, patchSystemLimit } from '../controllers/system-limit.controller.js';
+import { getSystemLimitAudit, getSystemLimits, getYoutubeQuotaUsage, patchSystemLimit } from '../controllers/system-limit.controller.js';
 import { requireAdmin, requireAuth } from '../middleware/auth.middleware.js';
 
 export const adminRouter = Router();
@@ -10,6 +10,8 @@ adminRouter.use(requireAuth, requireAdmin);
 adminRouter.get('/overview', getAdminOverview);
 adminRouter.get('/system-health', getSystemHealth);
 adminRouter.get('/system-limits', getSystemLimits);
+adminRouter.get('/system-limits/audit', getSystemLimitAudit);
+adminRouter.get('/youtube-quota', getYoutubeQuotaUsage);
 adminRouter.patch('/system-limits/:key', patchSystemLimit);
 adminRouter.get('/users', listAdminUsers);
 adminRouter.patch('/users/:id/entitlement', updateAdminEntitlement);

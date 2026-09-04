@@ -6,7 +6,8 @@
     "dev": "tsx watch src/server.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "seed:uat": "tsx src/scripts/seed-uat-users.ts"
   },
   "dependencies": {
     "bcryptjs": "^3.0.2",
