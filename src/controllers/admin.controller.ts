@@ -7,9 +7,11 @@ import { LessonModel } from '../models/lesson.model.js';
 import { NotificationDeliveryModel } from '../models/notification-delivery.model.js';
 import { getAiPlanQueueHealth } from '../services/ai-plan-queue.service.js';
 import { getAdminAiUsageOverview } from '../services/ai-usage.service.js';
+import { enrichAdminUsers, deleteInactiveUserAccount } from '../services/admin-user-management.service.js';
 import { changeUserEntitlement, entitlementCapabilities, listEntitlementHistory, normalizeEntitlement } from '../services/entitlement.service.js';
 
 const entitlementSchema=z.object({plan:z.enum(['FREE','PRO']),status:z.enum(['ACTIVE','INACTIVE','GRACE']),reason:z.string().trim().min(3).max(300),startsAt:z.coerce.date().optional(),endsAt:z.coerce.date().optional()});
+const deleteUserSchema=z.object({reason:z.string().trim().min(5).max(500),confirmation:z.literal('DELETE')});
 
 export async function getAdminOverview(_req:AuthenticatedRequest,res:Response,next:NextFunction){
   try{
@@ -22,8 +24,23 @@ export async function getAdminOverview(_req:AuthenticatedRequest,res:Response,ne
   }catch(error){next(error);}
 }
 
-export async function listAdminUsers(req:AuthenticatedRequest,res:Response,next:NextFunction){try{const query=String(req.query.q??'').trim();const filter=query?{$or:[{name:{$regex:query,$options:'i'}},{email:{$regex:query,$options:'i'}}]}:{};const users=await UserModel.find(filter).sort({createdAt:-1}).limit(100).select('name email role timezone entitlement createdAt lastSeenAt').lean();res.json(users.map(user=>({...user,entitlement:normalizeEntitlement(user.entitlement),capabilities:entitlementCapabilities(user.entitlement)})));}catch(error){next(error);}}
+export async function listAdminUsers(req:AuthenticatedRequest,res:Response,next:NextFunction){
+  try{
+    const query=String(req.query.q??'').trim();
+    const filter=query?{$or:[{name:{$regex:query,$options:'i'}},{email:{$regex:query,$options:'i'}}]}:{};
+    const users=await UserModel.find(filter).sort({lastSeenAt:-1,createdAt:-1}).limit(100).select('name email role timezone entitlement createdAt lastSeenAt').lean();
+    const normalized=users.map(user=>({...user,entitlement:normalizeEntitlement(user.entitlement),capabilities:entitlementCapabilities(user.entitlement)}));
+    res.json(await enrichAdminUsers(normalized));
+  }catch(error){next(error);}
+}
 
 export async function updateAdminEntitlement(req:AuthenticatedRequest,res:Response,next:NextFunction){try{const input=entitlementSchema.parse(req.body);if(input.endsAt&&input.startsAt&&input.endsAt<=input.startsAt)return res.status(400).json({message:'Entitlement end date must be after the start date.'});res.json(await changeUserEntitlement({userId:String(req.params.id),changedBy:req.user!.id,...input}));}catch(error){next(error);}}
 
 export async function getAdminEntitlementHistory(req:AuthenticatedRequest,res:Response,next:NextFunction){try{res.json(await listEntitlementHistory(String(req.params.id)));}catch(error){next(error);}}
+
+export async function deleteAdminUser(req:AuthenticatedRequest,res:Response,next:NextFunction){
+  try{
+    const input=deleteUserSchema.parse(req.body);
+    res.json(await deleteInactiveUserAccount({targetUserId:String(req.params.id),performedBy:req.user!.id,reason:input.reason}));
+  }catch(error){next(error);}
+}
