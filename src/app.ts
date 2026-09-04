@@ -31,6 +31,7 @@ import { publicProgressRouter, shareProgressRouter } from './routes/share-progre
 import { socialRouter } from './routes/social.routes.js';
 import { studySessionRouter } from './routes/study-session.routes.js';
 import { systemRouter } from './routes/system.routes.js';
+import { userMessageRouter } from './routes/user-message.routes.js';
 import { pingRedis } from './services/redis.service.js';
 
 const apiDocsDocument = {
@@ -80,6 +81,7 @@ app.get('/health/redis', async (_req, res) => {
 });
 
 app.use('/api/v1/public/progress', publicProgressRouter);
+app.use('/api/v1/messages', userMessageRouter);
 app.use('/api/v1/auth', authRouter);
 app.use('/api/v1/onboarding', onboardingRouter);
 app.use('/api/v1/share-progress', shareProgressRouter);
