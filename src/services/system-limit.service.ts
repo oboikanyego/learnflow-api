@@ -1,4 +1,5 @@
 import { Types } from 'mongoose';
+import { SystemLimitAuditModel } from '../models/system-limit-audit.model.js';
 import { SystemLimitModel, type SystemLimitCategory } from '../models/system-limit.model.js';
 
 export const SYSTEM_LIMIT_KEYS = {
@@ -86,15 +87,29 @@ export async function listSystemLimits() {
   return SystemLimitModel.find().sort({ category: 1, key: 1 }).lean();
 }
 
+export async function listSystemLimitAudit(limit = 100) {
+  return SystemLimitAuditModel.find()
+    .sort({ createdAt: -1 })
+    .limit(Math.min(Math.max(limit, 1), 250))
+    .populate('changedBy', 'name email')
+    .lean();
+}
+
 export async function updateSystemLimit(key: string, value: number, updatedBy: string) {
   const current = await SystemLimitModel.findOne({ key: key.toUpperCase() });
   if (!current) throw Object.assign(new Error('System limit not found'), { statusCode: 404 });
   if (!Number.isInteger(value) || value < current.minValue || value > current.maxValue) {
     throw Object.assign(new Error(`Value must be an integer between ${current.minValue} and ${current.maxValue}.`), { statusCode: 400 });
   }
+
+  const oldValue = current.value;
+  if (oldValue === value) return current.toObject();
+
+  const changedBy = new Types.ObjectId(updatedBy);
   current.value = value;
-  current.updatedBy = new Types.ObjectId(updatedBy) as unknown as typeof current.updatedBy;
+  current.updatedBy = changedBy as unknown as typeof current.updatedBy;
   await current.save();
+  await SystemLimitAuditModel.create({ key: current.key, category: current.category, oldValue, newValue: value, changedBy });
   clearSystemLimitCache();
   return current.toObject();
 }
