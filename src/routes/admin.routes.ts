@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { deleteAdminUser, getAdminEntitlementHistory, getAdminOverview, listAdminUsers, updateAdminEntitlement } from '../controllers/admin.controller.js';
+import { listSupportRequests, updateSupportRequestStatus } from '../controllers/admin-support.controller.js';
 import { getAdminBillingEvents, getAdminBillingSettings, getAdminBillingSettingsAudit, getAdminSubscriptionOperations, patchAdminBillingSettings } from '../controllers/billing-settings.controller.js';
 import { getSystemHealth } from '../controllers/system-health.controller.js';
 import { getSystemLimitAudit, getSystemLimits, getYoutubeQuotaUsage, patchSystemLimit } from '../controllers/system-limit.controller.js';
@@ -13,6 +14,8 @@ adminRouter.get('/system-limits', getSystemLimits);
 adminRouter.get('/system-limits/audit', getSystemLimitAudit);
 adminRouter.get('/youtube-quota', getYoutubeQuotaUsage);
 adminRouter.patch('/system-limits/:key', patchSystemLimit);
+adminRouter.get('/support-requests', listSupportRequests);
+adminRouter.patch('/support-requests/:id/status', updateSupportRequestStatus);
 adminRouter.get('/users', listAdminUsers);
 adminRouter.patch('/users/:id/entitlement', updateAdminEntitlement);
 adminRouter.get('/users/:id/entitlement-history', getAdminEntitlementHistory);

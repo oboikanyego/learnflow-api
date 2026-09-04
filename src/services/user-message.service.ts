@@ -2,7 +2,6 @@ import { Types } from 'mongoose';
 import { NotificationModel } from '../models/notification.model.js';
 import { UserMessageModel, type UserMessageType } from '../models/user-message.model.js';
 import { UserModel } from '../models/user.model.js';
-import { emailService } from './email.service.js';
 
 interface CreateUserMessageInput {
   type: UserMessageType;
@@ -15,24 +14,10 @@ interface CreateUserMessageInput {
   category?: string;
 }
 
-function buildAdminEmail(input: CreateUserMessageInput): { subject: string; text: string } {
-  const lines = [
-    `LearnFlow ${input.type.toLowerCase()} received`,
-    '',
-    `From: ${input.name} <${input.email}>`,
-    `Subject: ${input.subject}`,
-    ...(input.rating ? [`Rating: ${input.rating}/5`] : []),
-    ...(input.category ? [`Category: ${input.category}`] : []),
-    '',
-    input.message
-  ];
-  return { subject: `[LearnFlow ${input.type}] ${input.subject}`, text: lines.join('\n') };
-}
-
 function notificationTitle(type: UserMessageType): string {
   if (type === 'SUPPORT') return 'New support request';
-  if (type === 'FEEDBACK') return 'New LearnFlow feedback';
-  return 'New contact message';
+  if (type === 'FEEDBACK') return 'New feedback request';
+  return 'New contact request';
 }
 
 export async function createUserMessage(input: CreateUserMessageInput) {
@@ -44,13 +29,14 @@ export async function createUserMessage(input: CreateUserMessageInput) {
     subject: input.subject,
     message: input.message,
     ...(input.rating ? { rating: input.rating } : {}),
-    ...(input.category ? { category: input.category } : {})
+    ...(input.category ? { category: input.category } : {}),
+    notificationStatus: 'SKIPPED',
+    notificationError: 'Outbound communications are disabled for Contact, Feedback and Support during the pre-revenue testing phase.'
   });
 
-  const admins = await UserModel.find({ role: 'admin' }).select('_id email').lean();
+  const admins = await UserModel.find({ role: 'admin' }).select('_id').lean();
   if (!admins.length) {
-    record.notificationStatus = 'SKIPPED';
-    record.notificationError = 'No administrator account is configured.';
+    record.notificationError = 'Outbound communications are disabled for Contact, Feedback and Support during the pre-revenue testing phase. No administrator account is configured for in-app notification.';
     await record.save();
     return record.toObject();
   }
@@ -59,20 +45,11 @@ export async function createUserMessage(input: CreateUserMessageInput) {
     ownerId: admin._id,
     type: 'SYSTEM',
     title: notificationTitle(input.type),
-    message: `${input.name}: ${input.subject}`.slice(0, 240)
+    message: `${input.name}: ${input.subject}`.slice(0, 240),
+    actionUrl: '/admin/support-requests'
   })));
 
-  const email = buildAdminEmail(input);
-  const results = await Promise.all(admins.map(admin => emailService.send({ to: admin.email, ...email })));
-  const sent = results.filter(result => result.status === 'SENT');
-  const failed = results.filter(result => result.status === 'FAILED');
-  const skipped = results.filter(result => result.status === 'SKIPPED');
-
-  record.notifiedAdminCount = sent.length;
-  record.providerMessageIds = sent.flatMap(result => result.providerMessageId ? [result.providerMessageId] : []);
-  record.notificationStatus = sent.length === results.length ? 'SENT' : sent.length > 0 ? 'PARTIAL' : failed.length > 0 ? 'FAILED' : 'SKIPPED';
-  const errors = [...failed, ...skipped].flatMap(result => result.errorMessage ? [result.errorMessage] : []);
-  if (errors.length) record.notificationError = errors.join(' | ').slice(0, 1000);
+  record.notifiedAdminCount = admins.length;
   await record.save();
   return record.toObject();
 }
