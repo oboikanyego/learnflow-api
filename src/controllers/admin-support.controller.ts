@@ -56,9 +56,10 @@ export async function listSupportRequests(req: AuthenticatedRequest, res: Respon
 
 export async function updateSupportRequestStatus(req: AuthenticatedRequest, res: Response, next: NextFunction) {
   try {
-    if (!Types.ObjectId.isValid(req.params.id)) return res.status(400).json({ message: 'Invalid support request id.' });
+    const id = String(req.params.id ?? '');
+    if (!Types.ObjectId.isValid(id)) return res.status(400).json({ message: 'Invalid support request id.' });
     const input = statusSchema.parse(req.body);
-    const record = await UserMessageModel.findOne({ _id: req.params.id, type: 'SUPPORT' });
+    const record = await UserMessageModel.findOne({ _id: id, type: 'SUPPORT' });
     if (!record) return res.status(404).json({ message: 'Support request not found.' });
 
     const wasResolved = record.status === 'RESOLVED';
