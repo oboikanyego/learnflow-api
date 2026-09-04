@@ -7,6 +7,7 @@ import { UserMessageModel } from '../models/user-message.model.js';
 
 const querySchema = z.object({
   status: z.enum(['OPEN', 'IN_PROGRESS', 'RESOLVED']).optional(),
+  type: z.enum(['CONTACT', 'FEEDBACK', 'SUPPORT']).optional(),
   category: z.string().trim().max(80).optional(),
   q: z.string().trim().max(120).optional(),
   page: z.coerce.number().int().min(1).default(1),
@@ -21,8 +22,9 @@ const statusSchema = z.object({
 export async function listSupportRequests(req: AuthenticatedRequest, res: Response, next: NextFunction) {
   try {
     const input = querySchema.parse(req.query);
-    const filter: Record<string, unknown> = { type: 'SUPPORT' };
+    const filter: Record<string, unknown> = { type: { $in: ['CONTACT', 'FEEDBACK', 'SUPPORT'] } };
     if (input.status) filter.status = input.status;
+    if (input.type) filter.type = input.type;
     if (input.category) filter.category = input.category;
     if (input.q) {
       const regex = new RegExp(input.q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
@@ -39,7 +41,7 @@ export async function listSupportRequests(req: AuthenticatedRequest, res: Respon
     ]);
 
     const counts = await UserMessageModel.aggregate([
-      { $match: { type: 'SUPPORT' } },
+      { $match: { type: { $in: ['CONTACT', 'FEEDBACK', 'SUPPORT'] } } },
       { $group: { _id: '$status', count: { $sum: 1 } } }
     ]);
 
@@ -59,7 +61,7 @@ export async function updateSupportRequestStatus(req: AuthenticatedRequest, res:
     const id = String(req.params.id ?? '');
     if (!Types.ObjectId.isValid(id)) return res.status(400).json({ message: 'Invalid support request id.' });
     const input = statusSchema.parse(req.body);
-    const record = await UserMessageModel.findOne({ _id: id, type: 'SUPPORT' });
+    const record = await UserMessageModel.findById(id);
     if (!record) return res.status(404).json({ message: 'Support request not found.' });
 
     const wasResolved = record.status === 'RESOLVED';
@@ -80,8 +82,8 @@ export async function updateSupportRequestStatus(req: AuthenticatedRequest, res:
         ownerId: record.user,
         type: 'SYSTEM',
         title: 'Support request resolved',
-        message: `Your support request “${record.subject}” has been resolved.${input.resolutionNote ? ` ${input.resolutionNote}` : ''}`.slice(0, 500),
-        actionUrl: '/support'
+        message: `Your ${record.type.toLowerCase()} request “${record.subject}” has been resolved.${input.resolutionNote ? ` ${input.resolutionNote}` : ''}`.slice(0, 500),
+        actionUrl: record.type === 'SUPPORT' ? '/support' : '/notifications'
       });
     }
 
