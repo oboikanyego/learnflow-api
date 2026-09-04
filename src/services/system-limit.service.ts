@@ -15,7 +15,8 @@ export const SYSTEM_LIMIT_KEYS = {
   YOUTUBE_SEARCH_USER_DAILY: 'YOUTUBE_SEARCH_USER_DAILY',
   YOUTUBE_SEARCH_USER_HOURLY: 'YOUTUBE_SEARCH_USER_HOURLY',
   ACCOUNT_MIN_REGISTRATION_AGE: 'ACCOUNT_MIN_REGISTRATION_AGE',
-  YOUTUBE_MINOR_AGE_THRESHOLD: 'YOUTUBE_MINOR_AGE_THRESHOLD'
+  YOUTUBE_MINOR_AGE_THRESHOLD: 'YOUTUBE_MINOR_AGE_THRESHOLD',
+  ACCOUNT_INACTIVE_CLEANUP_DAYS: 'ACCOUNT_INACTIVE_CLEANUP_DAYS'
 } as const;
 
 export type SystemLimitKey = typeof SYSTEM_LIMIT_KEYS[keyof typeof SYSTEM_LIMIT_KEYS];
@@ -44,7 +45,8 @@ export const DEFAULT_SYSTEM_LIMITS: SeedLimit[] = [
   { key: SYSTEM_LIMIT_KEYS.YOUTUBE_SEARCH_USER_DAILY, category: 'YOUTUBE', label: 'YouTube searches per user per day', description: 'Maximum uncached YouTube searches per learner per rolling 24-hour window.', value: 20, minValue: 1, maxValue: 10000, unit: 'searches/day' },
   { key: SYSTEM_LIMIT_KEYS.YOUTUBE_SEARCH_USER_HOURLY, category: 'YOUTUBE', label: 'YouTube searches per user per hour', description: 'Maximum uncached YouTube searches per learner per rolling hour.', value: 8, minValue: 1, maxValue: 1000, unit: 'searches/hour' },
   { key: SYSTEM_LIMIT_KEYS.ACCOUNT_MIN_REGISTRATION_AGE, category: 'ACCOUNT', label: 'Minimum registration age', description: 'Minimum age required to create a LearnFlow account.', value: 13, minValue: 13, maxValue: 18, unit: 'years' },
-  { key: SYSTEM_LIMIT_KEYS.YOUTUBE_MINOR_AGE_THRESHOLD, category: 'ACCOUNT', label: 'YouTube minor threshold', description: 'Users younger than this age receive strict YouTube safety filtering and age-restricted videos are excluded.', value: 18, minValue: 14, maxValue: 21, unit: 'years' }
+  { key: SYSTEM_LIMIT_KEYS.YOUTUBE_MINOR_AGE_THRESHOLD, category: 'ACCOUNT', label: 'YouTube minor threshold', description: 'Users younger than this age receive strict YouTube safety filtering and age-restricted videos are excluded.', value: 18, minValue: 14, maxValue: 21, unit: 'years' },
+  { key: SYSTEM_LIMIT_KEYS.ACCOUNT_INACTIVE_CLEANUP_DAYS, category: 'ACCOUNT', label: 'Inactive account cleanup threshold', description: 'Minimum number of inactive days before an administrator may permanently clear a learner account and its owned application data.', value: 90, minValue: 30, maxValue: 1095, unit: 'days' }
 ];
 
 let cache: Map<string, number> | null = null;
@@ -88,11 +90,7 @@ export async function listSystemLimits() {
 }
 
 export async function listSystemLimitAudit(limit = 100) {
-  return SystemLimitAuditModel.find()
-    .sort({ createdAt: -1 })
-    .limit(Math.min(Math.max(limit, 1), 250))
-    .populate('changedBy', 'name email')
-    .lean();
+  return SystemLimitAuditModel.find().sort({ createdAt: -1 }).limit(Math.min(Math.max(limit, 1), 250)).populate('changedBy', 'name email').lean();
 }
 
 export async function updateSystemLimit(key: string, value: number, updatedBy: string) {
@@ -101,10 +99,8 @@ export async function updateSystemLimit(key: string, value: number, updatedBy: s
   if (!Number.isInteger(value) || value < current.minValue || value > current.maxValue) {
     throw Object.assign(new Error(`Value must be an integer between ${current.minValue} and ${current.maxValue}.`), { statusCode: 400 });
   }
-
   const oldValue = current.value;
   if (oldValue === value) return current.toObject();
-
   const changedBy = new Types.ObjectId(updatedBy);
   current.value = value;
   current.updatedBy = changedBy as unknown as typeof current.updatedBy;
@@ -114,10 +110,7 @@ export async function updateSystemLimit(key: string, value: number, updatedBy: s
   return current.toObject();
 }
 
-export function clearSystemLimitCache(): void {
-  cache = null;
-  cacheExpiresAt = 0;
-}
+export function clearSystemLimitCache(): void { cache = null; cacheExpiresAt = 0; }
 
 export function calculateAge(dateOfBirth: Date, now = new Date()): number {
   let age = now.getUTCFullYear() - dateOfBirth.getUTCFullYear();
