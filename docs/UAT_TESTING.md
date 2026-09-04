@@ -2,6 +2,8 @@
 
 ## Seeded test personas
 
+The complete repeatable persona and seeding guide is documented in [`docs/UAT_PERSONAS.md`](./UAT_PERSONAS.md).
+
 Run only in an intended UAT environment:
 
 ```bash
@@ -31,5 +33,8 @@ Never commit the UAT password. Store it in the environment/secret manager used b
 8. Minor and unknown-age users use strict YouTube SafeSearch and cannot receive `ytAgeRestricted` results.
 9. Made-for-Kids metadata is checked before embedding; privacy-enhanced YouTube embeds remain enabled.
 10. Core authenticated pages render without horizontal overflow at 360px, 768px and desktop widths.
+11. UAT personas can be restored repeatedly without creating duplicate accounts.
+12. UAT seeding fails when `UAT_TEST_PASSWORD` is missing or invalid.
+13. Production UAT seeding remains blocked unless `UAT_SEED_ALLOW_PRODUCTION=true` is deliberately supplied.
 
 The UI Playwright suite automates the browser-level security and responsive checks with `npm run test:e2e`.
