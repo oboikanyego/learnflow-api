@@ -50,6 +50,17 @@ export async function retryPlanJob(req: AuthenticatedRequest, res: Response, nex
 export async function listPlanJobs(req: AuthenticatedRequest, res: Response, next: NextFunction) { try { res.json(await AiPlanJobModel.find({ ownerId: req.user!.id }).sort({ createdAt: -1 }).limit(100).lean()); } catch (error) { next(error); } }
 export async function getPlanJob(req: AuthenticatedRequest, res: Response, next: NextFunction) { try { const job = await AiPlanJobModel.findOne({ _id: req.params.id, ownerId: req.user!.id }).lean(); if (!job) return res.status(404).json({ message: 'Learning plan job not found' }); res.json(job); } catch (error) { next(error); } }
 
+export async function deletePlanJob(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  try {
+    const job = await AiPlanJobModel.findOne({ _id: req.params.id, ownerId: req.user!.id });
+    if (!job) return res.status(404).json({ message: 'Learning plan job not found' });
+    if (job.learningPathId) return res.status(409).json({ message: 'This plan has already been saved. Remove it from your learning paths instead.' });
+    if (job.status === 'PROCESSING') return res.status(409).json({ message: 'This plan is still generating and cannot be discarded yet.' });
+    await AiPlanJobModel.deleteOne({ _id: job._id });
+    res.status(204).send();
+  } catch (error) { next(error); }
+}
+
 export async function savePlanJob(req: AuthenticatedRequest, res: Response, next: NextFunction) {
   try {
     const job = await AiPlanJobModel.findOne({ _id: req.params.id, ownerId: req.user!.id });

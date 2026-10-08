@@ -334,7 +334,10 @@ export const openApiDocument = {
       })
     },
     '/api/v1/ai/plan-jobs': { get: op('AI', 'List recent background plan jobs') },
-    '/api/v1/ai/plan-jobs/{id}': { get: op('AI', 'Get a background plan job', { parameters: [idParam('id')] }) },
+    '/api/v1/ai/plan-jobs/{id}': {
+      get: op('AI', 'Get a background plan job', { parameters: [idParam('id')] }),
+      delete: op('AI', 'Discard an unsaved plan job', { parameters: [idParam('id')], responses: { '204': { description: 'Plan job deleted' }, '409': { description: 'Already saved, or still generating' } } })
+    },
     '/api/v1/ai/plan-jobs/{id}/retry': { post: op('AI', 'Retry a failed background plan job', { parameters: [idParam('id')], responses: { '202': { description: 'Retry queued' }, '409': { description: 'Only failed jobs can be retried' } } }) },
     '/api/v1/ai/plan-jobs/{id}/save': { post: op('AI', 'Save a previewed (unsaved) completed plan job, optionally with learner edits', { parameters: [idParam('id')], responses: { '200': { description: 'Plan saved' }, '409': { description: 'Plan not ready or already saved' } } }) },
     '/api/v1/ai/coach': { post: op('AI', 'Ask the adaptive AI coach', { requestBody: jsonBody({ $ref: '#/components/schemas/CoachRequest' }) }) },
