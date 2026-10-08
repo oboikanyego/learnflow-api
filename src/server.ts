@@ -7,10 +7,15 @@ import { startAiPlanWorker } from './services/ai-plan-queue.service.js';
 import { billingGraceWorker } from './services/billing-grace-worker.service.js';
 import { weeklyReviewWorker } from './services/weekly-review-worker.service.js';
 import { seedSystemLimits } from './services/system-limit.service.js';
+import { cleanupOrphanedLearningData } from './services/data-integrity.service.js';
 
 async function bootstrap() {
   await connectDatabase();
   await seedSystemLimits();
+  const cleaned = await cleanupOrphanedLearningData();
+  if (cleaned.phases || cleaned.modules || cleaned.lessons) {
+    console.log(`[data-integrity] Removed orphaned learning data: ${cleaned.phases} phases, ${cleaned.modules} modules, ${cleaned.lessons} lessons.`);
+  }
   reminderWorker.start();
   billingGraceWorker.start();
   weeklyReviewWorker.start();
