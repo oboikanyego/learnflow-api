@@ -85,6 +85,6 @@ export async function listStudySessions(req: AuthenticatedRequest, res: Response
   try {
     const ownerId=req.user!.id; const sessions=await StudySessionModel.find({ ownerId }).sort({ startedAt:-1 }).limit(100).lean();
     const lessonIds=[...new Set(sessions.map(item=>String(item.lessonId)))]; const lessons=await LessonModel.find({ ownerId, _id:{ $in:lessonIds } }).select('title').lean(); const lessonMap=new Map(lessons.map(item=>[String(item._id),item.title]));
-    res.json(sessions.map(item=>({ ...item, lessonTitle:lessonMap.get(String(item.lessonId))??'Lesson' })));
+    res.json(sessions.filter(item=>lessonMap.has(String(item.lessonId))).map(item=>({ ...item, lessonTitle:lessonMap.get(String(item.lessonId))! })));
   } catch (error) { next(error); }
 }

@@ -13,8 +13,8 @@ async function bootstrap() {
   await connectDatabase();
   await seedSystemLimits();
   const cleaned = await cleanupOrphanedLearningData();
-  if (cleaned.phases || cleaned.modules || cleaned.lessons) {
-    console.log(`[data-integrity] Removed orphaned learning data: ${cleaned.phases} phases, ${cleaned.modules} modules, ${cleaned.lessons} lessons.`);
+  if (cleaned.phases || cleaned.modules || cleaned.lessons || cleaned.studySessions || cleaned.lessonComments) {
+    console.log(`[data-integrity] Removed orphaned learning data: ${cleaned.phases} phases, ${cleaned.modules} modules, ${cleaned.lessons} lessons, ${cleaned.studySessions} study sessions, ${cleaned.lessonComments} lesson comments.`);
   }
   reminderWorker.start();
   billingGraceWorker.start();

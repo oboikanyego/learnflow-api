@@ -2,6 +2,8 @@ import { LearningPathRepository, type CreateLearningPathInput, type UpdateLearni
 import { PhaseModel } from '../models/phase.model.js';
 import { ModuleModel } from '../models/module.model.js';
 import { LessonModel } from '../models/lesson.model.js';
+import { StudySessionModel } from '../models/study-session.model.js';
+import { LessonCommentModel } from '../models/lesson-comment.model.js';
 import { sendPlanCreatedEmail } from './learning-email.service.js';
 
 export class LearningPathService {
@@ -17,10 +19,13 @@ export class LearningPathService {
   async remove(ownerId: string, id: string) {
     const path = await this.repository.remove(ownerId, id);
     if (!path) throw Object.assign(new Error('Learning path not found'), { statusCode: 404 });
+    const lessonIds = await LessonModel.distinct('_id', { ownerId, learningPathId: id });
     await Promise.all([
       PhaseModel.deleteMany({ ownerId, learningPathId: id }),
       ModuleModel.deleteMany({ ownerId, learningPathId: id }),
-      LessonModel.deleteMany({ ownerId, learningPathId: id })
+      LessonModel.deleteMany({ ownerId, learningPathId: id }),
+      StudySessionModel.deleteMany({ ownerId, lessonId: { $in: lessonIds } }),
+      LessonCommentModel.deleteMany({ ownerId, lessonId: { $in: lessonIds } })
     ]);
   }
 }

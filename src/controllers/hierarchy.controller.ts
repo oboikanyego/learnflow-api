@@ -6,6 +6,8 @@ import { LearningPathModel } from '../models/learning-path.model.js';
 import { PhaseModel } from '../models/phase.model.js';
 import { ModuleModel } from '../models/module.model.js';
 import { LessonModel, lessonStatuses } from '../models/lesson.model.js';
+import { StudySessionModel } from '../models/study-session.model.js';
+import { LessonCommentModel } from '../models/lesson-comment.model.js';
 import { cachedJson, invalidateLearningCache, redisKeys } from '../services/redis.service.js';
 
 const id = z.string().refine(Types.ObjectId.isValid, 'Invalid id');
@@ -116,7 +118,13 @@ export async function deletePhase(req: AuthenticatedRequest, res: Response, next
     const phaseId = param(req.params.phaseId);
     const phase = await PhaseModel.findOneAndDelete({ _id: phaseId, ownerId });
     if (!phase) return res.status(404).json({ message: 'Phase not found' });
-    await Promise.all([ModuleModel.deleteMany({ ownerId, phaseId }), LessonModel.deleteMany({ ownerId, phaseId })]);
+    const lessonIds = await LessonModel.distinct('_id', { ownerId, phaseId });
+    await Promise.all([
+      ModuleModel.deleteMany({ ownerId, phaseId }),
+      LessonModel.deleteMany({ ownerId, phaseId }),
+      StudySessionModel.deleteMany({ ownerId, lessonId: { $in: lessonIds } }),
+      LessonCommentModel.deleteMany({ ownerId, lessonId: { $in: lessonIds } })
+    ]);
     await invalidateLearningCache(ownerId, { learningPathId: String(phase.learningPathId), invalidatePathList: false });
     res.status(204).send();
   } catch (error) { next(error); }
@@ -128,7 +136,12 @@ export async function deleteModule(req: AuthenticatedRequest, res: Response, nex
     const moduleId = param(req.params.moduleId);
     const module = await ModuleModel.findOneAndDelete({ _id: moduleId, ownerId });
     if (!module) return res.status(404).json({ message: 'Module not found' });
-    await LessonModel.deleteMany({ ownerId, moduleId });
+    const lessonIds = await LessonModel.distinct('_id', { ownerId, moduleId });
+    await Promise.all([
+      LessonModel.deleteMany({ ownerId, moduleId }),
+      StudySessionModel.deleteMany({ ownerId, lessonId: { $in: lessonIds } }),
+      LessonCommentModel.deleteMany({ ownerId, lessonId: { $in: lessonIds } })
+    ]);
     await invalidateLearningCache(ownerId, { learningPathId: String(module.learningPathId), invalidatePathList: false });
     res.status(204).send();
   } catch (error) { next(error); }
@@ -140,6 +153,10 @@ export async function deleteLesson(req: AuthenticatedRequest, res: Response, nex
     const lessonId = param(req.params.lessonId);
     const lesson = await LessonModel.findOneAndDelete({ _id: lessonId, ownerId });
     if (!lesson) return res.status(404).json({ message: 'Lesson not found' });
+    await Promise.all([
+      StudySessionModel.deleteMany({ ownerId, lessonId }),
+      LessonCommentModel.deleteMany({ ownerId, lessonId })
+    ]);
     await invalidateLearningCache(ownerId, { learningPathId: String(lesson.learningPathId), lessonId, invalidatePathList: false });
     res.status(204).send();
   } catch (error) { next(error); }
