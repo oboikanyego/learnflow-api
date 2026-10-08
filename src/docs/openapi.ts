@@ -308,6 +308,7 @@ export const openApiDocument = {
     '/api/v1/intelligence/coach': { post: genericWrite('Intelligence', 'Generate progress review or coaching insight') },
     '/api/v1/intelligence/replan': { get: op('Intelligence', 'Propose a catch-up/replanning change') },
     '/api/v1/intelligence/replan/apply': { post: genericWrite('Intelligence', 'Apply proposed replanning') },
+    '/api/v1/intelligence/replan/audit': { get: op('Intelligence', 'List recently approved AI-assisted schedule changes') },
 
     '/api/v1/retention': { get: op('Retention', 'Get retention summary') },
     '/api/v1/retention/queue': { get: op('Retention', 'List due and upcoming reviews') },

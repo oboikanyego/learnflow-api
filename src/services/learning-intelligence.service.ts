@@ -3,6 +3,7 @@ import { LearningPathModel } from '../models/learning-path.model.js';
 import { ModuleModel } from '../models/module.model.js';
 import { LearningGoalModel } from '../models/learning-goal.model.js';
 import { StudySessionModel } from '../models/study-session.model.js';
+import { AiActionAuditModel, type AiActionAuditSource } from '../models/ai-action-audit.model.js';
 
 const DAY = 86_400_000;
 
@@ -110,6 +111,22 @@ export async function buildReplanProposal(ownerId: string) {
   return { generatedAt:now.toISOString(),behindMinutes:missed.reduce((s,l)=>s+(l.durationMinutes||0),0),retentionPressure:{dueReviews:dueReviews.length,weakLessons:weakLessons.length,recommendedReviewMinutes:Math.min(180,(dueReviews.length+weakLessons.length+weakMastery.length)*15),priorityTopics:[...new Map(priority.map(l=>[String(l._id),{lessonId:String(l._id),title:l.title,confidenceScore:l.confidenceScore,masteryScore:l.masteryScore}])).values()].slice(0,8)},changes };
 }
 
-export async function applyReplanProposal(ownerId: string, changes: Array<{ lessonId: string; proposedScheduledAt: string }>) {
-  let updated=0;for(const change of changes){const result=await LessonModel.updateOne({_id:change.lessonId,ownerId},{$set:{scheduledAt:new Date(change.proposedScheduledAt),status:'SCHEDULED',reminderSentAt:null,missedAt:null}});updated+=result.modifiedCount;}return{updated};
+export async function applyReplanProposal(ownerId: string, changes: Array<{ lessonId: string; proposedScheduledAt: string }>, source: AiActionAuditSource = 'REPLAN') {
+  let updated = 0;
+  for (const change of changes) {
+    const lesson = await LessonModel.findOne({ _id: change.lessonId, ownerId }).select('title scheduledAt');
+    if (!lesson) continue;
+    const previousScheduledAt = lesson.scheduledAt;
+    const newScheduledAt = new Date(change.proposedScheduledAt);
+    const result = await LessonModel.updateOne({ _id: change.lessonId, ownerId }, { $set: { scheduledAt: newScheduledAt, status: 'SCHEDULED', reminderSentAt: null, missedAt: null } });
+    if (result.modifiedCount) {
+      updated += result.modifiedCount;
+      await AiActionAuditModel.create({ ownerId, lessonId: change.lessonId, title: lesson.title, previousScheduledAt, newScheduledAt, source, approvedAt: new Date() });
+    }
+  }
+  return { updated };
+}
+
+export async function listAiActionAudit(ownerId: string, limit = 20) {
+  return AiActionAuditModel.find({ ownerId }).sort({ createdAt: -1 }).limit(Math.min(Math.max(limit, 1), 100)).lean();
 }

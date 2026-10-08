@@ -14,11 +14,14 @@ vi.mock('../services/ai-plan-processor.service.js', () => ({
 vi.mock('../services/ai-provider.service.js', () => ({ getAiProviderInfo: vi.fn(), generateAiText: vi.fn() }));
 vi.mock('../services/ai-plan-queue.service.js', () => ({ enqueueAiPlanJob: vi.fn() }));
 vi.mock('../services/ai-usage.service.js', () => ({ completeAiUsage: vi.fn(), getUserAiUsage: vi.fn(), reserveAiUsage: vi.fn() }));
-vi.mock('../services/learning-intelligence.service.js', () => ({ coachContextFromIntelligence: vi.fn(), getLearningIntelligence: vi.fn() }));
+vi.mock('../services/learning-intelligence.service.js', () => ({ coachContextFromIntelligence: vi.fn(), getLearningIntelligence: vi.fn(), buildReplanProposal: vi.fn() }));
 
-import { deletePlanJob, savePlanJob } from './ai.controller.js';
+import { coach, deletePlanJob, savePlanJob } from './ai.controller.js';
 import { AiPlanJobModel } from '../models/ai-plan-job.model.js';
 import { getUserTimezone, persistGeneratedPlan } from '../services/ai-plan-processor.service.js';
+import { getAiProviderInfo, generateAiText } from '../services/ai-provider.service.js';
+import { completeAiUsage, getUserAiUsage, reserveAiUsage } from '../services/ai-usage.service.js';
+import { buildReplanProposal, getLearningIntelligence } from '../services/learning-intelligence.service.js';
 
 function mockRes(): Response {
   const res = {} as Response;
@@ -182,5 +185,82 @@ describe('deletePlanJob', () => {
 
     expect(AiPlanJobModel.deleteOne).toHaveBeenCalledWith({ _id: 'job-2' });
     expect(res.status).toHaveBeenCalledWith(204);
+  });
+});
+
+describe('coach', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getAiProviderInfo).mockReturnValue({ configured: true, provider: 'openai', model: 'gpt-4o-mini' } as never);
+    vi.mocked(reserveAiUsage).mockResolvedValue({ id: 'usage-1' } as never);
+    vi.mocked(getUserAiUsage).mockResolvedValue({} as never);
+    vi.mocked(generateAiText).mockResolvedValue('Here is some coaching advice.');
+    vi.mocked(completeAiUsage).mockResolvedValue(undefined as never);
+  });
+
+  function reqWithMessage(message = 'How am I doing this week?'): AuthenticatedRequest {
+    return mockReq({ body: { message } });
+  }
+
+  it('returns 503 when no AI provider is configured', async () => {
+    vi.mocked(getAiProviderInfo).mockReturnValue({ configured: false, provider: 'openai', model: '' } as never);
+    const res = mockRes();
+    const next = vi.fn();
+
+    await coach(reqWithMessage(), res, next);
+
+    expect(res.status).toHaveBeenCalledWith(503);
+    expect(generateAiText).not.toHaveBeenCalled();
+  });
+
+  it('does not attach a reschedule proposal when the learner has no missed lessons', async () => {
+    vi.mocked(getLearningIntelligence).mockResolvedValue({ missedLessons: 0 } as never);
+    const res = mockRes();
+    const next = vi.fn();
+
+    await coach(reqWithMessage(), res, next);
+
+    expect(buildReplanProposal).not.toHaveBeenCalled();
+    const [payload] = vi.mocked(res.json).mock.calls[0]!;
+    expect(payload).toMatchObject({ answer: 'Here is some coaching advice.', proposedReplan: undefined });
+  });
+
+  it('attaches a data-grounded reschedule proposal when the learner has missed lessons', async () => {
+    vi.mocked(getLearningIntelligence).mockResolvedValue({ missedLessons: 2 } as never);
+    const replan = { behindMinutes: 90, changes: [{ lessonId: 'l1', title: 'Intro', proposedScheduledAt: '2024-06-11T18:00:00.000Z', durationMinutes: 45 }] };
+    vi.mocked(buildReplanProposal).mockResolvedValue(replan as never);
+    const res = mockRes();
+    const next = vi.fn();
+
+    await coach(reqWithMessage(), res, next);
+
+    expect(buildReplanProposal).toHaveBeenCalledWith('user-1');
+    const [payload] = vi.mocked(res.json).mock.calls[0]!;
+    expect(payload).toMatchObject({ proposedReplan: replan });
+  });
+
+  it('omits the proposal when missed lessons are reported but the replan has no changes', async () => {
+    vi.mocked(getLearningIntelligence).mockResolvedValue({ missedLessons: 1 } as never);
+    vi.mocked(buildReplanProposal).mockResolvedValue({ behindMinutes: 0, changes: [] } as never);
+    const res = mockRes();
+    const next = vi.fn();
+
+    await coach(reqWithMessage(), res, next);
+
+    const [payload] = vi.mocked(res.json).mock.calls[0]!;
+    expect(payload).toMatchObject({ proposedReplan: undefined });
+  });
+
+  it('marks AI usage failed and forwards the error when generation throws', async () => {
+    vi.mocked(getLearningIntelligence).mockResolvedValue({ missedLessons: 0 } as never);
+    const error = new Error('provider timeout');
+    vi.mocked(generateAiText).mockRejectedValue(error);
+    const res = mockRes();
+    const next = vi.fn();
+
+    await coach(reqWithMessage(), res, next);
+
+    expect(completeAiUsage).toHaveBeenCalledWith('usage-1', 'FAILED', { errorMessage: 'provider timeout' });
+    expect(next).toHaveBeenCalledWith(error);
   });
 });

@@ -4,9 +4,9 @@ import type { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import { LessonModel } from '../models/lesson.model.js';
 import { generateAiText, getAiProviderInfo } from '../services/ai-provider.service.js';
 import { completeAiUsage, reserveAiUsage } from '../services/ai-usage.service.js';
-import { applyReplanProposal, buildReplanProposal, coachContextFromIntelligence, getLearningIntelligence } from '../services/learning-intelligence.service.js';
+import { applyReplanProposal, buildReplanProposal, coachContextFromIntelligence, getLearningIntelligence, listAiActionAudit } from '../services/learning-intelligence.service.js';
 
-const applySchema = z.object({ changes: z.array(z.object({ lessonId: z.string().min(1), proposedScheduledAt: z.coerce.date() })).min(1).max(50) });
+const applySchema = z.object({ changes: z.array(z.object({ lessonId: z.string().min(1), proposedScheduledAt: z.coerce.date() })).min(1).max(50), source: z.enum(['REPLAN', 'COACH']).optional() });
 const coachSchema = z.object({ message: z.string().trim().min(2).max(3000).optional() });
 
 export async function getIntelligenceOverview(req: AuthenticatedRequest, res: Response, next: NextFunction) {
@@ -52,6 +52,11 @@ export async function applyReplan(req: AuthenticatedRequest, res: Response, next
   try {
     const input = applySchema.parse(req.body);
     const changes = input.changes.map(change => ({ lessonId: change.lessonId, proposedScheduledAt: change.proposedScheduledAt.toISOString() }));
-    res.json(await applyReplanProposal(req.user!.id, changes));
+    res.json(await applyReplanProposal(req.user!.id, changes, input.source ?? 'REPLAN'));
   } catch (error) { next(error); }
+}
+
+export async function getAiActionAudit(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  try { res.json(await listAiActionAudit(req.user!.id)); }
+  catch (error) { next(error); }
 }

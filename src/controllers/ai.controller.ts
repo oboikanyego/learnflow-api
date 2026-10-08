@@ -6,7 +6,7 @@ import { getAiProviderInfo, generateAiText } from '../services/ai-provider.servi
 import { createGeneratedPlan, generatedPlanSchema, getUserTimezone, persistGeneratedPlan, planRequestSchema } from '../services/ai-plan-processor.service.js';
 import { enqueueAiPlanJob } from '../services/ai-plan-queue.service.js';
 import { completeAiUsage, getUserAiUsage, reserveAiUsage } from '../services/ai-usage.service.js';
-import { coachContextFromIntelligence, getLearningIntelligence } from '../services/learning-intelligence.service.js';
+import { buildReplanProposal, coachContextFromIntelligence, getLearningIntelligence } from '../services/learning-intelligence.service.js';
 
 const coachSchema = z.object({ message: z.string().min(2).max(4000), context: z.string().max(4000).optional() });
 
@@ -87,8 +87,10 @@ export async function coach(req: AuthenticatedRequest, res: Response, next: Next
     const usage = await reserveAiUsage(req.user!.id, req.user!.role, 'COACH', { hasContext: true, adaptive: true }); usageId = usage.id;
     const intelligence = await getLearningIntelligence(req.user!.id);
     const trackedContext = coachContextFromIntelligence(intelligence);
-    const prompt = `You are the LearnFlow adaptive learning coach. Base your answer on the learner's real activity below: actual focus time, completion consistency, confidence ratings, due reviews, weak topics, missed lessons and goals. Prioritize retention when confidence is low or reviews are due. Suggest realistic next actions, not generic motivation. Never invent activity and never claim to have changed LearnFlow data. Keep the response concise and practical.\n\nTracked learner context:\n${trackedContext}\n\nOptional learner-supplied context:\n${input.context ?? 'None'}\n\nLearner message:\n${input.message}`;
-    const answer = await generateAiText(prompt); await completeAiUsage(usage.id, 'SUCCEEDED'); res.json({ answer, provider: provider.provider, model: provider.model, usage: await getUserAiUsage(req.user!.id), adaptiveContext: true });
+    const prompt = `You are the LearnFlow adaptive learning coach. Base your answer on the learner's real activity below: actual focus time, completion consistency, confidence ratings, due reviews, weak topics, missed lessons and goals. Prioritize retention when confidence is low or reviews are due. Suggest realistic next actions, not generic motivation. Never invent activity and never claim to have changed LearnFlow data. If the learner has missed lessons, you may mention that a reschedule suggestion is available for them to review and approve separately; never state specific dates yourself, since only the reviewed suggestion is authoritative. Keep the response concise and practical.\n\nTracked learner context:\n${trackedContext}\n\nOptional learner-supplied context:\n${input.context ?? 'None'}\n\nLearner message:\n${input.message}`;
+    const answer = await generateAiText(prompt); await completeAiUsage(usage.id, 'SUCCEEDED');
+    const proposedReplan = intelligence.missedLessons > 0 ? await buildReplanProposal(req.user!.id) : undefined;
+    res.json({ answer, provider: provider.provider, model: provider.model, usage: await getUserAiUsage(req.user!.id), adaptiveContext: true, proposedReplan: proposedReplan?.changes.length ? proposedReplan : undefined });
   } catch (error) { if (usageId) await completeAiUsage(usageId, 'FAILED', { errorMessage: error instanceof Error ? error.message : 'AI coach request failed' }).catch(() => undefined); next(error); }
 }
 
