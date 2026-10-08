@@ -353,6 +353,7 @@ export const openApiDocument = {
     },
 
     '/api/v1/notifications': { get: op('Notifications', 'List notifications') },
+    '/api/v1/notifications/read-all': { patch: op('Notifications', 'Mark all notifications as read') },
     '/api/v1/notifications/{id}/read': { patch: op('Notifications', 'Mark notification as read', { parameters: [idParam('id')] }) },
 
     '/api/v1/share-progress/{learningPathId}': {
