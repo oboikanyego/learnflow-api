@@ -16,7 +16,8 @@ export const SYSTEM_LIMIT_KEYS = {
   YOUTUBE_SEARCH_USER_HOURLY: 'YOUTUBE_SEARCH_USER_HOURLY',
   ACCOUNT_MIN_REGISTRATION_AGE: 'ACCOUNT_MIN_REGISTRATION_AGE',
   YOUTUBE_MINOR_AGE_THRESHOLD: 'YOUTUBE_MINOR_AGE_THRESHOLD',
-  ACCOUNT_INACTIVE_CLEANUP_DAYS: 'ACCOUNT_INACTIVE_CLEANUP_DAYS'
+  ACCOUNT_INACTIVE_CLEANUP_DAYS: 'ACCOUNT_INACTIVE_CLEANUP_DAYS',
+  AI_PLAN_PREVIEW_CLEANUP_DAYS: 'AI_PLAN_PREVIEW_CLEANUP_DAYS'
 } as const;
 
 export type SystemLimitKey = typeof SYSTEM_LIMIT_KEYS[keyof typeof SYSTEM_LIMIT_KEYS];
@@ -46,7 +47,8 @@ export const DEFAULT_SYSTEM_LIMITS: SeedLimit[] = [
   { key: SYSTEM_LIMIT_KEYS.YOUTUBE_SEARCH_USER_HOURLY, category: 'YOUTUBE', label: 'YouTube searches per user per hour', description: 'Maximum uncached YouTube searches per learner per rolling hour.', value: 8, minValue: 1, maxValue: 1000, unit: 'searches/hour' },
   { key: SYSTEM_LIMIT_KEYS.ACCOUNT_MIN_REGISTRATION_AGE, category: 'ACCOUNT', label: 'Minimum registration age', description: 'Minimum age required to create a LearnFlow account.', value: 13, minValue: 13, maxValue: 18, unit: 'years' },
   { key: SYSTEM_LIMIT_KEYS.YOUTUBE_MINOR_AGE_THRESHOLD, category: 'ACCOUNT', label: 'YouTube minor threshold', description: 'Users younger than this age receive strict YouTube safety filtering and age-restricted videos are excluded.', value: 18, minValue: 14, maxValue: 21, unit: 'years' },
-  { key: SYSTEM_LIMIT_KEYS.ACCOUNT_INACTIVE_CLEANUP_DAYS, category: 'ACCOUNT', label: 'Inactive account cleanup threshold', description: 'Minimum number of inactive days before an administrator may permanently clear a learner account and its owned application data.', value: 90, minValue: 30, maxValue: 1095, unit: 'days' }
+  { key: SYSTEM_LIMIT_KEYS.ACCOUNT_INACTIVE_CLEANUP_DAYS, category: 'ACCOUNT', label: 'Inactive account cleanup threshold', description: 'Minimum number of inactive days before an administrator may permanently clear a learner account and its owned application data.', value: 90, minValue: 30, maxValue: 1095, unit: 'days' },
+  { key: SYSTEM_LIMIT_KEYS.AI_PLAN_PREVIEW_CLEANUP_DAYS, category: 'AI', label: 'Unsaved AI plan preview cleanup', description: 'Number of days an AI-generated plan preview can sit without being saved or discarded before LearnFlow automatically deletes it.', value: 2, minValue: 1, maxValue: 30, unit: 'days' }
 ];
 
 let cache: Map<string, number> | null = null;
