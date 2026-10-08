@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import { AiPlanJobModel } from '../models/ai-plan-job.model.js';
 import { getAiProviderInfo, generateAiText } from '../services/ai-provider.service.js';
-import { createGeneratedPlan, getUserTimezone, persistGeneratedPlan, planRequestSchema } from '../services/ai-plan-processor.service.js';
+import { createGeneratedPlan, generatedPlanSchema, getUserTimezone, persistGeneratedPlan, planRequestSchema } from '../services/ai-plan-processor.service.js';
 import { enqueueAiPlanJob } from '../services/ai-plan-queue.service.js';
 import { completeAiUsage, getUserAiUsage, reserveAiUsage } from '../services/ai-usage.service.js';
 import { coachContextFromIntelligence, getLearningIntelligence } from '../services/learning-intelligence.service.js';
@@ -49,6 +49,24 @@ export async function retryPlanJob(req: AuthenticatedRequest, res: Response, nex
 
 export async function listPlanJobs(req: AuthenticatedRequest, res: Response, next: NextFunction) { try { res.json(await AiPlanJobModel.find({ ownerId: req.user!.id }).sort({ createdAt: -1 }).limit(100).lean()); } catch (error) { next(error); } }
 export async function getPlanJob(req: AuthenticatedRequest, res: Response, next: NextFunction) { try { const job = await AiPlanJobModel.findOne({ _id: req.params.id, ownerId: req.user!.id }).lean(); if (!job) return res.status(404).json({ message: 'Learning plan job not found' }); res.json(job); } catch (error) { next(error); } }
+
+export async function savePlanJob(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  try {
+    const job = await AiPlanJobModel.findOne({ _id: req.params.id, ownerId: req.user!.id });
+    if (!job) return res.status(404).json({ message: 'Learning plan job not found' });
+    if (job.status !== 'COMPLETED' || !job.plan) return res.status(409).json({ message: 'This learning plan is not ready to be saved yet.' });
+    if (job.learningPathId) return res.status(409).json({ message: 'This learning plan has already been saved.' });
+
+    const plan = generatedPlanSchema.parse(req.body?.plan ?? job.plan);
+    const timezone = await getUserTimezone(req.user!.id);
+    const persisted = await persistGeneratedPlan(req.user!.id, timezone, plan);
+
+    job.plan = plan; job.learningPathId = persisted.learningPathId; job.input.save = true;
+    await job.save();
+
+    res.json({ learningPathId: persisted.learningPathId, lessonCount: persisted.lessonCount, job: job.toObject() });
+  } catch (error) { next(error); }
+}
 
 export async function coach(req: AuthenticatedRequest, res: Response, next: NextFunction) {
   let usageId: string | undefined;
