@@ -13,6 +13,9 @@ export interface UserMessageDocument {
   rating?: number;
   category?: string;
   status: UserMessageStatus;
+  resolvedAt?: Date;
+  resolvedBy?: Types.ObjectId;
+  resolutionNote?: string;
   notificationStatus: 'SENT' | 'PARTIAL' | 'SKIPPED' | 'FAILED';
   notifiedAdminCount: number;
   providerMessageIds: string[];
@@ -31,6 +34,9 @@ const userMessageSchema = new Schema<UserMessageDocument>({
   rating: { type: Number, min: 1, max: 5 },
   category: { type: String, trim: true, maxlength: 80 },
   status: { type: String, enum: ['OPEN', 'IN_PROGRESS', 'RESOLVED'], default: 'OPEN', index: true },
+  resolvedAt: Date,
+  resolvedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+  resolutionNote: { type: String, trim: true, maxlength: 1000 },
   notificationStatus: { type: String, enum: ['SENT', 'PARTIAL', 'SKIPPED', 'FAILED'], default: 'SKIPPED' },
   notifiedAdminCount: { type: Number, default: 0, min: 0 },
   providerMessageIds: [{ type: String, trim: true }],
@@ -38,5 +44,6 @@ const userMessageSchema = new Schema<UserMessageDocument>({
 }, { timestamps: true });
 
 userMessageSchema.index({ createdAt: -1, type: 1 });
+userMessageSchema.index({ type: 1, status: 1, createdAt: -1 });
 
 export const UserMessageModel = model<UserMessageDocument>('UserMessage', userMessageSchema);
